@@ -79,10 +79,17 @@ function connect() {
   };
 }
 
-const emit = (ev: any) => listeners.forEach((l) => l(ev));
+// The socket can open (and the backend send its state) before a component subscribes,
+// so the latest connection and login events are replayed to each new listener.
+const sticky: Record<string, any> = {};
+const emit = (ev: any) => {
+  if (ev.ev === "socket" || ev.ev === "state") sticky[ev.ev] = ev;
+  listeners.forEach((l) => l(ev));
+};
 
 export function on(l: Listener) {
   listeners.add(l);
+  Object.values(sticky).forEach(l);
   return () => void listeners.delete(l);
 }
 

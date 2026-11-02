@@ -33,7 +33,7 @@ function Avatar({ src, name, id, size: s = 48 }: { src?: string; name: string; i
   if (src && !broken)
     return <img class="avatar" src={src} alt="" width={s} height={s} loading="lazy" onError={() => setBroken(true)} />;
   return (
-    <span class="ph" style={{ width: s, height: s, fontSize: s * 0.36, "--h": hue(id) }} aria-hidden="true">
+    <span class="ph" style={{ width: `${s}px`, height: `${s}px`, fontSize: `${Math.round(s * 0.36)}px`, "--h": hue(id) }} aria-hidden="true">
       {initials(name)}
     </span>
   );
@@ -80,7 +80,7 @@ function Popover({ at, onClose, children, label }: { at: { x: number; y: number 
     };
   }, []);
   return (
-    <div ref={ref} class="pop" role="dialog" aria-label={label} style={{ left: pos.x, top: pos.y }}>
+    <div ref={ref} class="pop" role="dialog" aria-label={label} style={{ left: `${pos.x}px`, top: `${pos.y}px` }}>
       {children}
     </div>
   );
@@ -391,7 +391,7 @@ function ConvList(p: {
           <span class="sr">Tìm kiếm</span>
           <input ref={p.searchRef} placeholder="Tìm kiếm" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
           {q && (
-            <button class="icon-btn" style={{ width: 20, height: 20 }} aria-label="Xoá tìm kiếm" onClick={() => setQ("")}>
+            <button class="icon-btn" style={{ width: "20px", height: "20px" }} aria-label="Xoá tìm kiếm" onClick={() => setQ("")}>
               <Icon name="close" size={14} />
             </button>
           )}
@@ -440,10 +440,10 @@ function ConvList(p: {
         {!p.loaded &&
           Array.from({ length: 7 }, () => (
             <li class="skeleton" aria-hidden="true">
-              <i style={{ width: 48, height: 48, borderRadius: "50%" }} />
-              <span style={{ flex: 1, display: "grid", gap: 8 }}>
-                <i style={{ width: "55%", height: 12 }} />
-                <i style={{ width: "80%", height: 10 }} />
+              <i style={{ width: "48px", height: "48px", borderRadius: "50%" }} />
+              <span style={{ flex: 1, display: "grid", gap: "8px" }}>
+                <i style={{ width: "55%", height: "12px" }} />
+                <i style={{ width: "80%", height: "10px" }} />
               </span>
             </li>
           ))}
@@ -490,7 +490,7 @@ function ConvList(p: {
 function ContactRow({ c, onOpen }: { c: Contact; onOpen: (id: string, type: 0 | 1, name?: string, avatar?: string) => void }) {
   return (
     <li>
-      <button class="item" style={{ height: 60 }} onClick={() => onOpen(c.id, c.type, c.name, c.avatar)}>
+      <button class="item" style={{ height: "60px" }} onClick={() => onOpen(c.id, c.type, c.name, c.avatar)}>
         <Avatar src={c.avatar} name={c.name} id={c.id} size={40} />
         <span class="body"><span class="name">{c.name}</span></span>
       </button>
@@ -723,7 +723,7 @@ function Bubble({ m, mine, last, meId, onReply, onView, flash }: {
             <button class="photo" onClick={() => onView(src)} aria-label="Xem ảnh">
               <img src={String(a.thumb || a.href)} alt={m.text || "Hình ảnh"} width={params.width} height={params.height} loading="lazy" />
             </button>
-            {m.text && <div style={{ marginTop: 6 }}>{m.text}</div>}
+            {m.text && <div style={{ marginTop: "6px" }}>{m.text}</div>}
             {!bare && meta}
           </>
         );
@@ -739,7 +739,7 @@ function Bubble({ m, mine, last, meId, onReply, onView, flash }: {
         break;
       case "gif":
         bare = true;
-        body = <img class="photo" src={String(a.href || a.thumb)} alt="GIF" style={{ maxWidth: 260 }} loading="lazy" />;
+        body = <img class="photo" src={String(a.href || a.thumb)} alt="GIF" style={{ maxWidth: "260px" }} loading="lazy" />;
         break;
       case "video":
         bare = true;
