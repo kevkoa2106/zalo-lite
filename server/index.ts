@@ -192,7 +192,7 @@ async function syncContacts() {
         ids.slice(i, i + 6).map((id) =>
           groupCloud(id, "0", 30)
             .then((ms) => (n += ms.length))
-            .catch((e) => console.error(`group ${id} cloud history failed:`, e?.message ?? e)),
+            .catch((e) => console.error(`group ${id} cloud history failed (code ${e?.code}):`, e?.message ?? e)),
         ),
       );
     return `${n} messages across ${ids.length} groups`;
@@ -233,7 +233,8 @@ async function groupCloud(groupId: string, globalMsgId: string, count: number, o
         JSON.stringify({ groupId: props.groupId, globalMsgId: props.globalMsgId, count: props.count, msgIds: [], imei: ctx.imei, src: -1 }),
       );
       if (!params) throw new Error("encrypt failed");
-      const url = utils.makeURL(`${host}/api/cm/${props.old ? "getoldv2" : "getrecentv2"}`, { params });
+      // zca-js would stamp its own zpw_ver (685); the group-cloud service is newer, so send Zalo PC 26.10.20's 694.
+      const url = utils.makeURL(`${host}/api/cm/${props.old ? "getoldv2" : "getrecentv2"}`, { params, zpw_ver: 694 });
       return utils.resolve(await utils.request(url, { method: "GET" }));
     });
   let data = await a.groupCloud({ groupId, globalMsgId, count, old });
