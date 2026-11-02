@@ -3,7 +3,7 @@
 import { Zalo, ThreadType, LoginQRCallbackEventType, CloseReason, type API } from "zca-js";
 import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { openStore, type Msg, type Store, type Thread } from "./store";
 import { normalize, previewOf } from "./normalize";
@@ -12,6 +12,7 @@ const PORT = Number(process.env.ZL_PORT ?? 17789);
 const TOKEN = process.env.ZL_TOKEN ?? "";
 const DATA = process.env.ZL_DATA ?? join(homedir(), "Library", "Application Support", "zalo-lite");
 const SESSION = join(DATA, "session.json");
+const ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "http://localhost:1420", "http://127.0.0.1:1420"]);
 mkdirSync(DATA, { recursive: true });
 
 type State =
@@ -267,7 +268,8 @@ async function handle(r: Req): Promise<unknown> {
       mkdirSync(dir, { recursive: true });
       const paths: string[] = [];
       for (const f of r.files as { name: string; b64: string }[]) {
-        const p = join(dir, f.name.replace(/[\\/]/g, "_"));
+        const name = basename(f.name.replace(/\\/g, "/"));
+        const p = join(dir, name && name !== "." && name !== ".." ? name : `file-${paths.length}`);
         await Bun.write(p, Buffer.from(f.b64, "base64"));
         paths.push(p);
       }
@@ -350,6 +352,9 @@ Bun.serve({
   fetch(req, server) {
     const url = new URL(req.url);
     if (TOKEN && url.searchParams.get("token") !== TOKEN) return new Response("forbidden", { status: 403 });
+    // Browsers always send Origin; refusing foreign ones stops any website from reading chats via localhost.
+    const origin = req.headers.get("origin");
+    if (origin && !ORIGINS.has(origin)) return new Response("forbidden", { status: 403 });
     if (server.upgrade(req)) return;
     return new Response("zalo-lite backend");
   },
