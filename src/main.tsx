@@ -1,0 +1,976 @@
+import { render } from "preact";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
+import "./styles.css";
+import { call, on, type Contact, type Me, type Msg, type State, type Thread } from "./api";
+import { ago, clock, day, hue, initials, size } from "./format";
+import { Icon, type IconName } from "./icons";
+
+// ---------- helpers ----------
+
+const REACTIONS: [string, string][] = [
+  ["/-strong", "👍"], ["/-heart", "❤️"], [":>", "😆"], [":o", "😮"], [":-((", "😭"], [":-h", "😡"],
+];
+const EMOJI: Record<string, string> = {
+  ...Object.fromEntries(REACTIONS),
+  "/-break": "💔", "/-weak": "👎", ":-*": "😘", ":')": "😂", "/-rose": "🌹", "/-ok": "👌", ";xx": "😍",
+  "/-li": "☀️", "/-bd": "🎂", "/-shit": "💩", ";-/": "😕", ";-)": "😉", "/-fade": "😶", "/-bome": "💣",
+};
+const PREVIEW_ICON: Partial<Record<Msg["kind"], IconName>> = {
+  photo: "image", file: "file", link: "link", video: "video", voice: "mic", sticker: "sticker", gif: "image", call: "phoneIn",
+};
+const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase();
+const isMac = navigator.platform.startsWith("Mac");
+const MAX_UPLOAD = 100 * 1024 * 1024; // ponytail: files go base64 over the local socket; stream them if bigger uploads matter.
+
+function openExternal(url: string) {
+  const t = (window as any).__TAURI__;
+  if (t?.opener) t.opener.openUrl(url);
+  else window.open(url, "_blank", "noopener");
+}
+
+function Avatar({ src, name, id, size: s = 48 }: { src?: string; name: string; id: string; size?: number }) {
+  const [broken, setBroken] = useState(false);
+  if (src && !broken)
+    return <img class="avatar" src={src} alt="" width={s} height={s} loading="lazy" onError={() => setBroken(true)} />;
+  return (
+    <span class="ph" style={{ width: s, height: s, fontSize: s * 0.36, "--h": hue(id) }} aria-hidden="true">
+      {initials(name)}
+    </span>
+  );
+}
+
+function useTheme() {
+  const [theme, setTheme] = useState<"dark" | "light" | "system">(() => {
+    try {
+      return (localStorage.getItem("theme") as any) || "dark";
+    } catch {
+      return "dark";
+    }
+  });
+  useEffect(() => {
+    const mq = matchMedia("(prefers-color-scheme: light)");
+    const apply = () => document.documentElement.classList.toggle("light", theme === "light" || (theme === "system" && mq.matches));
+    apply();
+    try {
+      localStorage.setItem("theme", theme);
+    } catch {}
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [theme]);
+  return [theme, setTheme] as const;
+}
+
+// Click-away popover anchored to a point; rendered fixed so it escapes scrolling containers.
+function Popover({ at, onClose, children, label }: { at: { x: number; y: number }; onClose: () => void; children: any; label: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState(at);
+  useLayoutEffect(() => {
+    const r = ref.current!.getBoundingClientRect();
+    setPos({ x: Math.max(8, Math.min(at.x, innerWidth - r.width - 8)), y: Math.max(8, Math.min(at.y, innerHeight - r.height - 8)) });
+    ref.current!.querySelector<HTMLElement>("button")?.focus();
+  }, [at.x, at.y]);
+  useEffect(() => {
+    const down = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && onClose();
+    const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    setTimeout(() => addEventListener("mousedown", down));
+    addEventListener("keydown", key);
+    return () => {
+      removeEventListener("mousedown", down);
+      removeEventListener("keydown", key);
+    };
+  }, []);
+  return (
+    <div ref={ref} class="pop" role="dialog" aria-label={label} style={{ left: pos.x, top: pos.y }}>
+      {children}
+    </div>
+  );
+}
+
+// ---------- app ----------
+
+function App() {
+  const [state, setState] = useState<State>({ state: "boot" });
+  const [up, setUp] = useState(false);
+  useEffect(
+    () =>
+      on((ev) => {
+        if (ev.ev === "state") setState(ev);
+        if (ev.ev === "socket") setUp(ev.up);
+      }),
+    [],
+  );
+  if (state.state === "ready" || state.state === "kicked") return <Shell me={state.state === "ready" ? state.me : null} kicked={state.state === "kicked"} up={up} />;
+  return <Login state={state} up={up} />;
+}
+
+// ---------- login ----------
+
+function Login({ state, up }: { state: State; up: boolean }) {
+  useEffect(() => {
+    if (up && (state.state === "logged_out" || state.state === "error")) call("login_qr").catch(() => {});
+  }, [up, state.state]);
+  useEffect(() => void (document.title = "Zalo Lite"), []);
+
+  const qrSrc = state.state === "qr" ? (state.qr.startsWith("data:") ? state.qr : `data:image/png;base64,${state.qr}`) : "";
+  return (
+    <main class="login">
+      <div class="login-card">
+        <p class="brand">Zalo Lite</p>
+        <p class="lead">Đăng nhập tài khoản Zalo<br />để kết nối với ứng dụng Zalo Lite</p>
+        <h2>Đăng nhập qua mã QR</h2>
+        {state.state === "scanned" ? (
+          <div class="scanned" aria-live="polite">
+            <Avatar src={state.avatar} name={state.name} id={state.name} size={88} />
+            <div class="who">{state.name}</div>
+            <p class="note" style={{ margin: 0 }}>Vui lòng xác nhận đăng nhập trên điện thoại của bạn.</p>
+            <button class="btn ghost" onClick={() => call("login_qr")}>Dùng tài khoản khác</button>
+          </div>
+        ) : (
+          <>
+            <div class="qr" aria-live="polite">
+              {qrSrc ? <img src={qrSrc} alt="Mã QR đăng nhập" /> : <div class="spin" role="status" aria-label="Đang tải mã QR" />}
+              {(state.state === "qr_expired" || state.state === "error" || !up) && (
+                <div class="veil">
+                  {!up ? (
+                    <>
+                      <div class="spin" style={{ margin: "0 auto" }} />
+                      <span>Đang khởi động…</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>{state.state === "error" ? "Không thể tạo mã QR" : "Mã QR hết hạn"}</span>
+                      <button class="btn" onClick={() => call("qr_retry")}>
+                        <Icon name="refresh" size={18} /> Lấy mã mới
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+            <p class="note">
+              Mở ứng dụng Zalo trên điện thoại, chọn <b>Quét mã QR</b> và quét mã này để đăng nhập.
+            </p>
+          </>
+        )}
+      </div>
+    </main>
+  );
+}
+
+// ---------- shell ----------
+
+type Typing = Record<string, { uid: string; until: number }>;
+
+function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean }) {
+  const [theme, setTheme] = useTheme();
+  const [threads, setThreads] = useState<Record<string, Thread>>({});
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [active, setActive] = useState<string>("");
+  const [msgs, setMsgs] = useState<Record<string, Msg[]>>({});
+  const [typing, setTyping] = useState<Typing>({});
+  const [view, setView] = useState<"chats" | "contacts">("chats");
+  const [toast, setToast] = useState("");
+  const [settings, setSettings] = useState<{ x: number; y: number } | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const meId = me?.id ?? "";
+
+  const flash = (t: string) => {
+    setToast(t);
+    setTimeout(() => setToast((c) => (c === t ? "" : c)), 3000);
+  };
+
+  // Bootstrap and live events.
+  useEffect(() => {
+    if (!up || kicked) return;
+    call<{ threads: Thread[]; contacts: Contact[] }>("bootstrap").then((d) => {
+      setThreads(Object.fromEntries(d.threads.map((t) => [t.id, t])));
+      setContacts(d.contacts);
+      setLoaded(true);
+    }).catch(() => {});
+  }, [up, kicked]);
+
+  useEffect(
+    () =>
+      on((ev) => {
+        switch (ev.ev) {
+          case "threads":
+            setThreads(Object.fromEntries((ev.threads as Thread[]).map((t) => [t.id, t])));
+            setLoaded(true);
+            break;
+          case "thread":
+            if (ev.thread) setThreads((s) => ({ ...s, [ev.thread.id]: ev.thread }));
+            break;
+          case "contacts":
+            setContacts(ev.contacts);
+            break;
+          case "msg": {
+            const m = ev.msg as Msg;
+            if (ev.thread) setThreads((s) => ({ ...s, [ev.thread.id]: ev.thread }));
+            setMsgs((s) => (s[m.threadId] ? { ...s, [m.threadId]: upsert(s[m.threadId]!, m) } : s));
+            setTyping((t) => (t[m.threadId]?.uid === m.from ? { ...t, [m.threadId]: { uid: "", until: 0 } } : t));
+            break;
+          }
+          case "deleted":
+            setMsgs((s) => (s[ev.threadId] ? { ...s, [ev.threadId]: s[ev.threadId]!.filter((m) => m.id !== ev.msgId) } : s));
+            break;
+          case "typing":
+            setTyping((t) => ({ ...t, [ev.threadId]: { uid: ev.uid, until: Date.now() + 5000 } }));
+            setTimeout(() => setTyping((t) => ({ ...t })), 5100);
+            break;
+        }
+      }),
+    [],
+  );
+
+  // Keep the open thread marked read as new messages land.
+  useEffect(() => {
+    const t = threads[active];
+    if (t?.unread) {
+      setThreads((s) => ({ ...s, [active]: { ...t, unread: 0 } }));
+      call("open", { threadId: active, type: t.type, before: Number.MAX_SAFE_INTEGER, peek: true }).catch(() => {});
+    }
+  }, [threads[active]?.unread]);
+
+  const totalUnread = Object.values(threads).reduce((n, t) => n + (t.unread ? 1 : 0), 0);
+  useEffect(() => {
+    document.title = `${totalUnread ? `(${totalUnread}) ` : ""}Zalo Lite${me ? ` - ${me.name}` : ""}`;
+  }, [totalUnread, me?.name]);
+
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setView("chats");
+        setTimeout(() => searchRef.current?.focus());
+      }
+      if (e.key === "Escape" && document.activeElement === searchRef.current) searchRef.current!.blur();
+    };
+    addEventListener("keydown", key);
+    return () => removeEventListener("keydown", key);
+  }, []);
+
+  async function open(id: string, type: 0 | 1, name?: string, avatar?: string) {
+    setView("chats");
+    if (!threads[id])
+      setThreads((s) => ({
+        ...s,
+        [id]: { id, type, name: name ?? id, avatar: avatar ?? "", unread: 0, lastTs: 0, preview: "", previewKind: "text", previewFrom: "", members: 0 },
+      }));
+    setActive(id);
+    try {
+      const r = await call<{ thread: Thread; messages: Msg[] }>("open", { threadId: id, type });
+      setMsgs((s) => ({ ...s, [id]: r.messages }));
+      setThreads((s) => ({ ...s, [id]: { ...(s[id] ?? r.thread), ...r.thread, unread: 0, name: r.thread.name !== id ? r.thread.name : (s[id]?.name ?? id) } }));
+    } catch (e: any) {
+      flash(e.message);
+    }
+  }
+
+  const thread = threads[active];
+  const typer = typing[active];
+  const typingName = typer && typer.until > Date.now() && typer.uid ? (contacts.find((c) => c.id === typer.uid)?.name ?? thread?.name ?? "") : "";
+
+  return (
+    <div class="shell">
+      <nav class="rail" aria-label="Điều hướng">
+        <div class="me" title={me?.name}>
+          <Avatar src={me?.avatar} name={me?.name ?? ""} id={meId} size={48} />
+        </div>
+        <button class="rail-btn" aria-label="Tin nhắn" aria-current={view === "chats" ? "page" : undefined} onClick={() => setView("chats")}>
+          <Icon name="chat" size={26} />
+          {totalUnread > 0 && <span class="dot">{totalUnread > 99 ? "99+" : totalUnread}</span>}
+        </button>
+        <button class="rail-btn" aria-label="Danh bạ" aria-current={view === "contacts" ? "page" : undefined} onClick={() => setView("contacts")}>
+          <Icon name="contacts" size={26} />
+        </button>
+        <div class="spacer" />
+        <button class="rail-btn" aria-label="Cài đặt" aria-haspopup="menu" onClick={(e) => setSettings({ x: (e.currentTarget as HTMLElement).getBoundingClientRect().right + 6, y: innerHeight - 160 })}>
+          <Icon name="settings" size={26} />
+        </button>
+      </nav>
+
+      {settings && (
+        <Popover at={settings} onClose={() => setSettings(null)} label="Cài đặt">
+          <div class="menu" role="menu">
+            {([["dark", "Giao diện tối", "moon"], ["light", "Giao diện sáng", "sun"], ["system", "Theo hệ thống", "settings"]] as const).map(([v, label, ic]) => (
+              <button role="menuitemradio" aria-checked={theme === v} onClick={() => setTheme(v)}>
+                <Icon name={ic} size={18} /> {label}
+                {theme === v && <span class="check"><Icon name="check" size={16} /></span>}
+              </button>
+            ))}
+            <hr />
+            <button role="menuitem" class="danger" onClick={() => call("logout")}>
+              <Icon name="logout" size={18} /> Đăng xuất
+            </button>
+          </div>
+        </Popover>
+      )}
+
+      <ConvList
+        view={view}
+        threads={threads}
+        contacts={contacts}
+        loaded={loaded}
+        active={active}
+        searchRef={searchRef}
+        onOpen={open}
+      />
+
+      <section class="main" aria-label="Cuộc trò chuyện">
+        {kicked && (
+          <div class="banner warn" role="alert">
+            Tài khoản đang được dùng trên một máy tính hoặc trình duyệt khác.
+            <button onClick={() => call("reconnect")}>Kết nối lại</button>
+          </div>
+        )}
+        {!up && <div class="banner" role="status">Đang kết nối lại…</div>}
+        {thread ? (
+          <Chat
+            key={thread.id}
+            thread={thread}
+            meId={meId}
+            meName={me?.name ?? ""}
+            messages={msgs[thread.id]}
+            setMessages={(f) => setMsgs((s) => ({ ...s, [thread.id]: f(s[thread.id] ?? []) }))}
+            typingName={typingName}
+            flash={flash}
+          />
+        ) : (
+          <div class="welcome">
+            <h1>Chào mừng đến với <b>Zalo Lite</b>!</h1>
+            <p>Nhắn tin với người thân, bạn bè và đồng nghiệp ngay trên máy tính, nhẹ và nhanh hơn.</p>
+            <p class="hint">
+              Nhấn <kbd>{isMac ? "⌘" : "Ctrl"} F</kbd> để tìm cuộc trò chuyện
+            </p>
+          </div>
+        )}
+      </section>
+      {toast && <div class="toast" role="status">{toast}</div>}
+    </div>
+  );
+}
+
+function upsert(list: Msg[], m: Msg) {
+  const i = list.findIndex((x) => x.id === m.id);
+  if (i >= 0) return list.map((x, j) => (j === i ? m : x));
+  const next = [...list, m];
+  next.sort((a, b) => a.ts - b.ts);
+  return next;
+}
+
+// ---------- conversation list ----------
+
+function ConvList(p: {
+  view: "chats" | "contacts";
+  threads: Record<string, Thread>;
+  contacts: Contact[];
+  loaded: boolean;
+  active: string;
+  searchRef: { current: HTMLInputElement | null };
+  onOpen: (id: string, type: 0 | 1, name?: string, avatar?: string) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [tab, setTab] = useState<"all" | "unread">("all");
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  const sorted = useMemo(() => Object.values(p.threads).filter((t) => t.lastTs > 0 || t.id === p.active).sort((a, b) => b.lastTs - a.lastTs), [p.threads, p.active]);
+  const fq = fold(q.trim());
+  const shownThreads = fq ? sorted.filter((t) => fold(t.name).includes(fq)) : tab === "unread" ? sorted.filter((t) => t.unread) : sorted;
+  const shownContacts = fq ? p.contacts.filter((c) => !p.threads[c.id]?.lastTs && fold(c.name).includes(fq)).slice(0, 30) : [];
+
+  const head = (
+    <div class="list-head">
+      <div class="search-row">
+        <label class="search">
+          <Icon name="search" size={18} />
+          <span class="sr">Tìm kiếm</span>
+          <input ref={p.searchRef} placeholder="Tìm kiếm" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
+          {q && (
+            <button class="icon-btn" style={{ width: 20, height: 20 }} aria-label="Xoá tìm kiếm" onClick={() => setQ("")}>
+              <Icon name="close" size={14} />
+            </button>
+          )}
+        </label>
+        <button class="icon-btn" aria-label="Thêm bạn" title="Thêm bạn" disabled>
+          <Icon name="addFriend" size={20} />
+        </button>
+        <button class="icon-btn" aria-label="Tạo nhóm" title="Tạo nhóm" disabled>
+          <Icon name="addGroup" size={20} />
+        </button>
+      </div>
+      {p.view === "chats" && !fq ? (
+        <div class="tabs" role="tablist">
+          <button class="tab" role="tab" aria-selected={tab === "all"} onClick={() => setTab("all")}>Tất cả</button>
+          <button class="tab" role="tab" aria-selected={tab === "unread"} onClick={() => setTab("unread")}>Chưa đọc</button>
+        </div>
+      ) : (
+        <div class="tabs">
+          <span class="tab" aria-selected="true">{fq ? "Kết quả tìm kiếm" : "Danh bạ"}</span>
+        </div>
+      )}
+    </div>
+  );
+
+  if (p.view === "contacts" && !fq) {
+    const groups = p.contacts.filter((c) => c.type === 1).sort((a, b) => a.name.localeCompare(b.name, "vi"));
+    const friends = p.contacts.filter((c) => c.type === 0).sort((a, b) => a.name.localeCompare(b.name, "vi"));
+    return (
+      <aside class="list" aria-label="Danh bạ">
+        {head}
+        <ul class="items">
+          {!p.contacts.length && <li class="list-empty">{p.loaded ? "Chưa có liên hệ nào" : "Đang tải danh bạ…"}</li>}
+          {friends.length > 0 && <li class="section-label">Bạn bè ({friends.length})</li>}
+          {friends.map((c) => <ContactRow c={c} onOpen={p.onOpen} />)}
+          {groups.length > 0 && <li class="section-label">Nhóm ({groups.length})</li>}
+          {groups.map((c) => <ContactRow c={c} onOpen={p.onOpen} />)}
+        </ul>
+      </aside>
+    );
+  }
+
+  return (
+    <aside class="list" aria-label="Danh sách trò chuyện">
+      {head}
+      <ul class="items">
+        {!p.loaded &&
+          Array.from({ length: 7 }, () => (
+            <li class="skeleton" aria-hidden="true">
+              <i style={{ width: 48, height: 48, borderRadius: "50%" }} />
+              <span style={{ flex: 1, display: "grid", gap: 8 }}>
+                <i style={{ width: "55%", height: 12 }} />
+                <i style={{ width: "80%", height: 10 }} />
+              </span>
+            </li>
+          ))}
+        {p.loaded && !shownThreads.length && !shownContacts.length && (
+          <li class="list-empty">
+            {fq ? (
+              <><strong>Không tìm thấy kết quả</strong>Thử tìm bằng tên khác.</>
+            ) : tab === "unread" ? (
+              <><strong>Không có tin nhắn chưa đọc</strong>Bạn đã xem hết tin nhắn.</>
+            ) : (
+              <><strong>Chưa có cuộc trò chuyện</strong>Tin nhắn mới sẽ xuất hiện ở đây. Mở Danh bạ để bắt đầu trò chuyện.</>
+            )}
+          </li>
+        )}
+        {fq && shownThreads.length > 0 && <li class="section-label">Trò chuyện</li>}
+        {shownThreads.map((t) => (
+          <li>
+            <button class={`item${t.unread ? " unread" : ""}`} aria-current={t.id === p.active} onClick={() => p.onOpen(t.id, t.type)}>
+              <Avatar src={t.avatar} name={t.name} id={t.id} />
+              <span class="body">
+                <span class="row">
+                  <span class="name">{t.name}</span>
+                  {t.lastTs > 0 && <span class="time">{ago(t.lastTs)}</span>}
+                </span>
+                <span class="row">
+                  <span class="pv">
+                    {t.previewFrom && <span style={{ flex: "none" }}>{t.previewFrom}:</span>}
+                    {PREVIEW_ICON[t.previewKind] && <Icon name={PREVIEW_ICON[t.previewKind]!} size={16} />}
+                    <span>{t.preview}</span>
+                  </span>
+                  {t.unread > 0 && <span class="badge" aria-label={`${t.unread} tin nhắn chưa đọc`}>{t.unread > 5 ? "5+" : t.unread}</span>}
+                </span>
+              </span>
+            </button>
+          </li>
+        ))}
+        {shownContacts.length > 0 && <li class="section-label">Liên hệ và nhóm</li>}
+        {shownContacts.map((c) => <ContactRow c={c} onOpen={p.onOpen} />)}
+      </ul>
+    </aside>
+  );
+}
+
+function ContactRow({ c, onOpen }: { c: Contact; onOpen: (id: string, type: 0 | 1, name?: string, avatar?: string) => void }) {
+  return (
+    <li>
+      <button class="item" style={{ height: 60 }} onClick={() => onOpen(c.id, c.type, c.name, c.avatar)}>
+        <Avatar src={c.avatar} name={c.name} id={c.id} size={40} />
+        <span class="body"><span class="name">{c.name}</span></span>
+      </button>
+    </li>
+  );
+}
+
+// ---------- chat ----------
+
+type ChatProps = {
+  thread: Thread;
+  meId: string;
+  meName: string;
+  messages: Msg[] | undefined;
+  setMessages: (f: (m: Msg[]) => Msg[]) => void;
+  typingName: string;
+  flash: (t: string) => void;
+};
+
+function Chat({ thread, meId, meName, messages, setMessages, typingName, flash }: ChatProps) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  const [more, setMore] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [replyTo, setReplyTo] = useState<Msg | null>(null);
+  const [viewer, setViewer] = useState("");
+  const [members, setMembers] = useState<Record<string, { name: string; avatar: string }>>({});
+  const prevHeight = useRef(0);
+
+  useEffect(() => {
+    if (thread.type !== 1) return;
+    call<{ id: string; name: string; avatar: string }[]>("members", { threadId: thread.id })
+      .then((ms) => setMembers(Object.fromEntries(ms.map((m) => [m.id, m]))))
+      .catch(() => {});
+  }, [thread.id]);
+
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    if (prevHeight.current) {
+      el.scrollTop += el.scrollHeight - prevHeight.current;
+      prevHeight.current = 0;
+    } else if (stick.current) el.scrollTop = el.scrollHeight;
+  }, [messages]);
+
+  async function older() {
+    if (!messages?.length || loadingOlder || !more) return;
+    setLoadingOlder(true);
+    try {
+      const r = await call<{ messages: Msg[] }>("open", { threadId: thread.id, type: thread.type, before: messages[0]!.ts });
+      if (r.messages.length < 50) setMore(false);
+      prevHeight.current = scroller.current!.scrollHeight;
+      setMessages((cur) => [...r.messages.filter((m) => !cur.some((c) => c.id === m.id)), ...cur]);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
+
+  function onScroll() {
+    const el = scroller.current!;
+    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (el.scrollTop < 60) older();
+  }
+
+  async function send(text: string, files: File[]) {
+    stick.current = true;
+    const quote = replyTo;
+    setReplyTo(null);
+    if (files.length) {
+      const big = files.find((f) => f.size > MAX_UPLOAD);
+      if (big) return flash(`"${big.name}" lớn hơn 100 MB`);
+      try {
+        const payload = await Promise.all(files.map(async (f) => ({ name: f.name || "image.png", b64: await toB64(f) })));
+        await call("files", { threadId: thread.id, type: thread.type, files: payload, text });
+      } catch (e: any) {
+        flash(`Gửi file thất bại: ${e.message}`);
+      }
+      return;
+    }
+    const tmp: Msg = {
+      id: `tmp-${Date.now()}`, cliMsgId: "", threadId: thread.id, type: thread.type, from: meId, dName: meName, ts: Date.now(),
+      kind: "text", text, attach: null, undone: false, reactions: {}, pending: true,
+      quote: quote ? { from: quote.from, dName: quote.dName, text: quote.text || "Tin nhắn" } : null,
+    };
+    setMessages((m) => [...m, tmp]);
+    try {
+      const saved = await call<Msg>("send", { threadId: thread.id, type: thread.type, text, quoteId: quote?.id });
+      setMessages((m) => (saved && !m.some((x) => x.id === saved.id) ? m.map((x) => (x.id === tmp.id ? saved : x)) : m.filter((x) => x.id !== tmp.id)));
+    } catch (e: any) {
+      setMessages((m) => m.map((x) => (x.id === tmp.id ? { ...x, pending: false, failed: true } : x)));
+      flash(`Không gửi được tin nhắn: ${e.message}`);
+    }
+  }
+
+  const nameOf = (uid: string, fallback: string) => (uid === meId ? meName : members[uid]?.name || fallback || uid);
+  const avatarOf = (uid: string) => (thread.type === 0 && uid === thread.id ? thread.avatar : members[uid]?.avatar ?? "");
+
+  // Group runs of messages by the same sender within 5 minutes, with day separators between days.
+  const blocks = useMemo(() => {
+    const out: ({ day: string } | { from: string; dName: string; items: Msg[] })[] = [];
+    let lastDay = "";
+    for (const m of messages ?? []) {
+      const d = day(m.ts);
+      if (d !== lastDay) out.push({ day: (lastDay = d) });
+      const prev = out[out.length - 1];
+      if (prev && "items" in prev && prev.from === m.from && m.ts - prev.items[prev.items.length - 1]!.ts < 300000) prev.items.push(m);
+      else out.push({ from: m.from, dName: m.dName, items: [m] });
+    }
+    return out;
+  }, [messages]);
+
+  return (
+    <>
+      <header class="chat-head">
+        <Avatar src={thread.avatar} name={thread.name} id={thread.id} size={44} />
+        <div class="title">
+          <h2>{thread.name}</h2>
+          <div class="sub">
+            {thread.type === 1 ? (
+              <><Icon name="contacts" size={15} /> {thread.members || Object.keys(members).length || ""} thành viên</>
+            ) : (
+              "Bạn bè"
+            )}
+          </div>
+        </div>
+      </header>
+
+      <div class="messages" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={`Tin nhắn với ${thread.name}`}>
+        {messages === undefined && <div class="spin" style={{ margin: "40px auto" }} role="status" aria-label="Đang tải tin nhắn" />}
+        {messages?.length === 0 && (
+          <div class="list-empty">
+            <strong>Chưa có tin nhắn</strong>
+            {thread.type === 0 ? "Tin nhắn cũ chỉ có trên điện thoại. Tin nhắn mới sẽ được lưu ở đây." : "Hãy gửi lời chào tới nhóm."}
+          </div>
+        )}
+        {messages && messages.length > 0 && more && (
+          <button class="older" onClick={older} disabled={loadingOlder}>
+            {loadingOlder ? "Đang tải…" : "Xem tin nhắn cũ hơn"}
+          </button>
+        )}
+        {blocks.map((b) =>
+          "day" in b ? (
+            <div class="day"><span>{b.day}</span></div>
+          ) : (
+            <div class={`group${b.from === meId ? " me" : ""}`}>
+              {b.from !== meId && (
+                <div class="gutter">
+                  <Avatar src={avatarOf(b.from)} name={nameOf(b.from, b.dName)} id={b.from} size={36} />
+                </div>
+              )}
+              <div class="stack">
+                {thread.type === 1 && b.from !== meId && <div class="sender">{nameOf(b.from, b.dName)}</div>}
+                {b.items.map((m, i) => (
+                  <Bubble
+                    m={m}
+                    mine={m.from === meId}
+                    last={i === b.items.length - 1}
+                    meId={meId}
+                    onReply={() => setReplyTo(m)}
+                    onView={setViewer}
+                    flash={flash}
+                  />
+                ))}
+              </div>
+            </div>
+          ),
+        )}
+      </div>
+      <div class="typing" aria-live="polite">
+        {typingName && (
+          <>
+            <span class="dots"><i /><i /><i /></span> {thread.type === 1 ? `${typingName} đang soạn tin…` : "Đang soạn tin…"}
+          </>
+        )}
+      </div>
+      <Composer thread={thread} replyTo={replyTo} replyName={replyTo ? nameOf(replyTo.from, replyTo.dName) : ""} cancelReply={() => setReplyTo(null)} onSend={send} />
+      {viewer && (
+        <div class="viewer" role="dialog" aria-label="Xem ảnh" tabIndex={-1} onClick={() => setViewer("")} onKeyDown={(e) => e.key === "Escape" && setViewer("")} ref={(el) => el?.focus()}>
+          <img src={viewer} alt="" />
+        </div>
+      )}
+    </>
+  );
+}
+
+const toB64 = (f: Blob) =>
+  new Promise<string>((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(",")[1] ?? "");
+    r.onerror = () => rej(r.error);
+    r.readAsDataURL(f);
+  });
+
+const URL_RE = /(https?:\/\/[^\s<]+[^\s<.,:;"')\]!?])/g;
+function Linkified({ text }: { text: string }) {
+  const parts = text.split(URL_RE);
+  return (
+    <>
+      {parts.map((s, i) =>
+        i % 2 ? (
+          <a href={s} onClick={(e) => (e.preventDefault(), openExternal(s))}>{s}</a>
+        ) : (
+          s
+        ),
+      )}
+    </>
+  );
+}
+
+function Bubble({ m, mine, last, meId, onReply, onView, flash }: {
+  m: Msg; mine: boolean; last: boolean; meId: string; onReply: () => void; onView: (src: string) => void; flash: (t: string) => void;
+}) {
+  const [pop, setPop] = useState<null | { kind: "react" | "more"; x: number; y: number }>(null);
+  const a = m.attach ?? {};
+  const params = (a.params ?? {}) as Record<string, any>;
+  const reactions = Object.entries(m.reactions);
+  const icons = [...new Set(reactions.map(([, r]) => r))].slice(0, 3);
+  const meta = last && <span class="meta">{clock(m.ts)}{m.pending ? " · Đang gửi" : m.failed ? " · Gửi lỗi" : ""}</span>;
+
+  let body: any;
+  let bare = false;
+  if (m.undone) body = <>Tin nhắn đã được thu hồi{meta}</>;
+  else
+    switch (m.kind) {
+      case "photo": {
+        const src = String(params.hd || a.href || a.thumb || "");
+        bare = !m.text;
+        body = (
+          <>
+            <button class="photo" onClick={() => onView(src)} aria-label="Xem ảnh">
+              <img src={String(a.thumb || a.href)} alt={m.text || "Hình ảnh"} width={params.width} height={params.height} loading="lazy" />
+            </button>
+            {m.text && <div style={{ marginTop: 6 }}>{m.text}</div>}
+            {!bare && meta}
+          </>
+        );
+        break;
+      }
+      case "sticker":
+        bare = true;
+        body = (
+          <span class="sticker">
+            <img src={`https://zalo-api.zadn.vn/api/emoticon/sticker/webpc?eid=${a.id}&size=130`} alt="Sticker" loading="lazy" />
+          </span>
+        );
+        break;
+      case "gif":
+        bare = true;
+        body = <img class="photo" src={String(a.href || a.thumb)} alt="GIF" style={{ maxWidth: 260 }} loading="lazy" />;
+        break;
+      case "video":
+        bare = true;
+        body = <video class="vid" src={String(a.href)} poster={String(a.thumb || "")} controls preload="none" />;
+        break;
+      case "voice":
+        body = <><audio src={String(a.href)} controls preload="none" />{meta}</>;
+        break;
+      case "file": {
+        const ext = String(params.fileExt || String(a.title ?? "").split(".").pop() || "file").slice(0, 4);
+        body = (
+          <>
+            <a class="filecard" href={String(a.href)} onClick={(e) => (e.preventDefault(), openExternal(String(a.href)))}>
+              <span class="ext">{ext}</span>
+              <span class="fbody">
+                <span class="fname" style={{ display: "block" }}>{String(a.title ?? "File")}</span>
+                <span class="fsize">{size(Number(params.fileSize))}</span>
+              </span>
+              <Icon name="download" size={20} />
+            </a>
+            {meta}
+          </>
+        );
+        break;
+      }
+      case "link":
+        body = (
+          <>
+            <span class="linkcard">
+              {a.thumb && <img src={String(a.thumb)} alt="" loading="lazy" />}
+              {a.title && a.title !== a.href && <span class="ltitle">{String(a.title)}</span>}
+              {a.description && <span class="ldesc">{String(a.description)}</span>}
+              <a href={String(a.href)} onClick={(e) => (e.preventDefault(), openExternal(String(a.href)))}>{String(a.href)}</a>
+            </span>
+            {meta}
+          </>
+        );
+        break;
+      case "call":
+        body = (
+          <>
+            <span class="call"><span class="ic"><Icon name="phoneIn" size={18} /></span>{m.text || "Cuộc gọi thoại"}</span>
+            {meta}
+          </>
+        );
+        break;
+      case "other":
+        body = <><i>Tin nhắn này chưa được hỗ trợ hiển thị.</i>{meta}</>;
+        break;
+      default:
+        body = <><Linkified text={m.text} />{meta}</>;
+    }
+
+  const openPop = (kind: "react" | "more") => (e: MouseEvent) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setPop({ kind, x: r.left, y: r.bottom + 6 });
+  };
+  const act = (op: string, args: Record<string, unknown> = {}) => {
+    setPop(null);
+    call(op, { msgId: m.id, ...args }).catch((e) => flash(e.message));
+  };
+  const canAct = !m.pending && !m.failed && !m.id.startsWith("tmp-");
+
+  return (
+    <div class={`msg${reactions.length ? " has-reacts" : ""}`}>
+      <div class={`bubble${bare ? " bare" : ""}${m.undone ? " recalled" : ""}${m.pending ? " pending" : ""}${m.failed ? " failed" : ""}`}>
+        {m.quote && !m.undone && (
+          <span class="quote"><b>{m.quote.dName || "Tin nhắn"}</b><span>{m.quote.text}</span></span>
+        )}
+        {body}
+        {reactions.length > 0 && (
+          <span class="reacts" title={reactions.map(([, r]) => EMOJI[r] ?? r).join(" ")}>
+            {icons.map((r) => <span>{EMOJI[r] ?? "👍"}</span>)}
+            {reactions.length > 1 && <span class="n">{reactions.length}</span>}
+          </span>
+        )}
+      </div>
+      {canAct && !m.undone && (
+        <div class={`tools${pop ? " open" : ""}`}>
+          <button class="icon-btn" aria-label="Thả cảm xúc" onClick={openPop("react")}><Icon name="smile" size={16} /></button>
+          <button class="icon-btn" aria-label="Trả lời" onClick={onReply}><Icon name="reply" size={16} /></button>
+          <button class="icon-btn" aria-label="Thêm" aria-haspopup="menu" onClick={openPop("more")}><Icon name="more" size={16} /></button>
+        </div>
+      )}
+      {pop?.kind === "react" && (
+        <Popover at={pop} onClose={() => setPop(null)} label="Chọn cảm xúc">
+          <div class="emoji-row">
+            {REACTIONS.map(([code, e]) => (
+              <button aria-label={`Thả ${e}`} aria-pressed={m.reactions[meId] === code} onClick={() => act("react", { icon: code })}>{e}</button>
+            ))}
+          </div>
+        </Popover>
+      )}
+      {pop?.kind === "more" && (
+        <Popover at={pop} onClose={() => setPop(null)} label="Tuỳ chọn tin nhắn">
+          <div class="menu" role="menu">
+            {m.text && (
+              <button role="menuitem" onClick={() => (setPop(null), navigator.clipboard.writeText(m.text), flash("Đã sao chép"))}>
+                <Icon name="copy" size={18} /> Sao chép tin nhắn
+              </button>
+            )}
+            <button role="menuitem" onClick={() => (setPop(null), onReply())}><Icon name="reply" size={18} /> Trả lời</button>
+            <hr />
+            {mine && (
+              <button role="menuitem" class="danger" onClick={() => act("undo")}><Icon name="undo" size={18} /> Thu hồi</button>
+            )}
+            <button role="menuitem" class="danger" onClick={() => act("delete")}><Icon name="trash" size={18} /> Xoá chỉ ở phía tôi</button>
+          </div>
+        </Popover>
+      )}
+    </div>
+  );
+}
+
+// ---------- composer ----------
+
+function Composer({ thread, replyTo, replyName, cancelReply, onSend }: {
+  thread: Thread; replyTo: Msg | null; replyName: string; cancelReply: () => void; onSend: (text: string, files: File[]) => void;
+}) {
+  const [text, setText] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const ta = useRef<HTMLTextAreaElement>(null);
+  const imgInput = useRef<HTMLInputElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const lastTyping = useRef(0);
+
+  useEffect(() => ta.current?.focus(), [thread.id, replyTo]);
+  useLayoutEffect(() => {
+    const el = ta.current!;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
+
+  // Drag and drop anywhere over the chat pane.
+  useEffect(() => {
+    const pane = ta.current!.closest(".main") as HTMLElement;
+    let depth = 0;
+    const enter = (e: DragEvent) => e.dataTransfer?.types.includes("Files") && (depth++, setDragging(true));
+    const leave = () => --depth <= 0 && ((depth = 0), setDragging(false));
+    const over = (e: DragEvent) => e.preventDefault();
+    const drop = (e: DragEvent) => {
+      e.preventDefault();
+      depth = 0;
+      setDragging(false);
+      if (e.dataTransfer?.files.length) setFiles((f) => [...f, ...e.dataTransfer!.files]);
+    };
+    pane.addEventListener("dragenter", enter);
+    pane.addEventListener("dragleave", leave);
+    pane.addEventListener("dragover", over);
+    pane.addEventListener("drop", drop);
+    return () => {
+      pane.removeEventListener("dragenter", enter);
+      pane.removeEventListener("dragleave", leave);
+      pane.removeEventListener("dragover", over);
+      pane.removeEventListener("drop", drop);
+    };
+  }, []);
+
+  const canSend = text.trim().length > 0 || files.length > 0;
+  function submit() {
+    if (!canSend) return;
+    onSend(text.trim(), files);
+    setText("");
+    setFiles([]);
+  }
+
+  return (
+    <div class="composer">
+      {dragging && <div class="drop">Thả file vào đây để gửi</div>}
+      <div class="bar">
+        <button class="icon-btn" aria-label="Gửi hình ảnh" title="Gửi hình ảnh" onClick={() => imgInput.current!.click()}><Icon name="image" size={22} /></button>
+        <button class="icon-btn" aria-label="Đính kèm file" title="Đính kèm file" onClick={() => fileInput.current!.click()}><Icon name="attach" size={22} /></button>
+        <input ref={imgInput} type="file" accept="image/*" multiple hidden onChange={(e) => (setFiles((f) => [...f, ...e.currentTarget.files!]), (e.currentTarget.value = ""))} />
+        <input ref={fileInput} type="file" multiple hidden onChange={(e) => (setFiles((f) => [...f, ...e.currentTarget.files!]), (e.currentTarget.value = ""))} />
+      </div>
+      {replyTo && (
+        <div class="replying">
+          <div class="rbody">
+            <b><Icon name="reply" size={15} /> Trả lời {replyName}</b>
+            <span>{replyTo.text || "Tin nhắn"}</span>
+          </div>
+          <button class="icon-btn" aria-label="Huỷ trả lời" onClick={cancelReply}><Icon name="close" size={16} /></button>
+        </div>
+      )}
+      {files.length > 0 && (
+        <div class="staged">
+          {files.map((f, i) => (
+            <span class="chip">
+              <Icon name={f.type.startsWith("image/") ? "image" : "file"} size={16} />
+              <span>{f.name || "Ảnh dán"}</span>
+              <button class="icon-btn" aria-label={`Bỏ ${f.name}`} onClick={() => setFiles((fs) => fs.filter((_, j) => j !== i))}><Icon name="close" size={14} /></button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div class="input-row">
+        <textarea
+          ref={ta}
+          rows={1}
+          value={text}
+          aria-label={`Nhập tin nhắn tới ${thread.name}`}
+          placeholder={`Nhập @, tin nhắn tới ${thread.name}`}
+          onInput={(e) => {
+            setText(e.currentTarget.value);
+            if (Date.now() - lastTyping.current > 3000) {
+              lastTyping.current = Date.now();
+              call("typing", { threadId: thread.id, type: thread.type }).catch(() => {});
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+              e.preventDefault();
+              submit();
+            }
+            if (e.key === "Escape" && replyTo) cancelReply();
+          }}
+          onPaste={(e) => {
+            const pasted = [...(e.clipboardData?.files ?? [])];
+            if (pasted.length) {
+              e.preventDefault();
+              setFiles((f) => [...f, ...pasted]);
+            }
+          }}
+        />
+        <button class="send" onClick={submit} disabled={!canSend} aria-label="Gửi">
+          Gửi <Icon name="send" size={18} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+render(<App />, document.getElementById("app")!);

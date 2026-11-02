@@ -224,6 +224,11 @@ async function handle(r: Req): Promise<unknown> {
     case "login_qr": return void loginQR();
     case "qr_retry": return void (qrActions ? qrActions.retry() : loginQR());
     case "logout": return logout();
+    case "reconnect":
+      api?.listener.stop();
+      store?.close();
+      store = null;
+      return resume();
   }
   if (!api || !store) throw new Error("not logged in");
   const msg = (id: string) => {
