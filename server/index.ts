@@ -342,6 +342,49 @@ async function resolveStickers() {
 }
 
 type Sticker = { id: number; cateId: number; type: number; url: string };
+type Pack = { id: number; name: string; icon: string };
+
+// Your sticker packs, loaded the way Zalo PC does it (getStickerCatsV2 → _handleGetCatesData):
+// GET /api/message/sticker/category/list/v2 with an encrypted empty string returns
+// {dataUrl, cs, data, exCateIds}. The pack list is the JSON file at dataUrl (else the inline
+// `data`), minus exCateIds, sorted by type then status.
+// ponytail: Zalo PC also checks MD5(file + salt) === cs; the salt sits in its code, so a
+// parseable JSON array is accepted instead, with `data` as the fallback.
+let packCache: Pack[] | null = null;
+async function stickerPacks(): Promise<Pack[]> {
+  if (packCache) return packCache;
+  const a = api as any;
+  if (!a.stickerCats)
+    api!.custom("stickerCats", async ({ utils }) => {
+      const host = a.zpwServiceMap?.sticker?.[0];
+      if (!host) throw new Error("no sticker service in login info");
+      const params = utils.encodeAES("");
+      if (!params) throw new Error("encrypt failed");
+      return utils.resolve(await utils.request(utils.makeURL(`${host}/api/message/sticker/category/list/v2`, { params }), { method: "GET" }));
+    });
+  let res = await a.stickerCats();
+  if (typeof res === "string") res = JSON.parse(res);
+  let cats: any[] = [];
+  if (res?.dataUrl)
+    try {
+      const body = await (await fetch(String(res.dataUrl).replace(/^http:/, "https:"))).json();
+      if (Array.isArray(body)) cats = body;
+    } catch (e) {
+      console.error("sticker pack file failed:", e);
+    }
+  if (!cats.length && Array.isArray(res?.data)) cats = res.data;
+  const excluded = new Set((res?.exCateIds ?? []).map(Number));
+  cats = cats.filter((c) => c?.id && !excluded.has(Number(c.id)));
+  if (cats[0]) console.log("sticker pack fields:", Object.keys(cats[0]).join(", "));
+  const rank = (c: any) => (c.status === 4 ? 0 : Number(c.status) || 0);
+  cats.sort((x, y) => (x.type == y.type ? rank(y) - rank(x) : Number(y.type) - Number(x.type)));
+  packCache = cats.map((c) => ({
+    id: Number(c.id),
+    name: String(c.name ?? c.title ?? c.cateName ?? ""),
+    icon: String(c.iconUrl ?? c.icon ?? c.thumbUrl ?? c.thumb ?? c.iconPreviewUrl ?? ""),
+  }));
+  return packCache;
+}
 
 // Zalo's own attachment limits, read by zca-js from the login settings.
 const fileLimits = () => {
@@ -426,6 +469,16 @@ async function handle(r: Req): Promise<unknown> {
       const ids = (await api.getStickers(q)).slice(0, 48);
       if (!ids.length) return [];
       return (await api.getStickersDetail(ids)).map((d): Sticker => {
+        const url = d.stickerWebpUrl || d.stickerUrl;
+        store!.set(`sticker:${d.id}`, url);
+        return { id: d.id, cateId: d.cateId, type: d.type, url };
+      });
+    }
+    case "stickerPacks":
+      return stickerPacks();
+    case "stickerPack": {
+      const pack = await api.getStickerCategoryDetail(Number(r.id));
+      return pack.map((d): Sticker => {
         const url = d.stickerWebpUrl || d.stickerUrl;
         store!.set(`sticker:${d.id}`, url);
         return { id: d.id, cateId: d.cateId, type: d.type, url };
