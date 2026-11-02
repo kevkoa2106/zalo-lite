@@ -184,7 +184,7 @@ async function syncContacts() {
     groupIds = new Set(ids);
     return ids.length;
   });
-  await step("conversations", () => preloadConversations(ids));
+  await step("conversations", () => preloadConversations());
   await step("group info", async () => {
     // ponytail: sequential 50-id chunks; parallelise if accounts with thousands of groups feel slow.
     for (let i = 0; i < ids.length; i += 50) {
@@ -208,45 +208,35 @@ let groupIds = new Set<string>();
 
 // The conversation list: latest message of every conversation, groups included.
 // Same call Zalo PC makes at startup (getLastMessagesForPreview → /api/preloadconvers/get-last-msgs).
-async function preloadConversations(groups: string[]) {
-  let preloaded = 0;
-  try {
-    const a = api as any;
-    if (!a.preloadLastMsgs)
-      api!.custom("preloadLastMsgs", async ({ ctx, utils }) => {
-        const params = utils.encodeAES(JSON.stringify({ threadIdLocalMsgId: JSON.stringify({}), imei: ctx.imei }));
-        if (!params) throw new Error("encrypt failed");
-        // zca-js keeps the service map on the api object (see its getGroupChatHistory), not on ctx.
-        const host = a.zpwServiceMap?.conversation?.[0];
-        if (!host) throw new Error("no conversation service in login info");
-        const url = utils.makeURL(`${host}/api/preloadconvers/get-last-msgs`, { params });
-        return utils.resolve(await utils.request(url, { method: "GET" }));
-      });
-    let data = await a.preloadLastMsgs();
-    if (typeof data === "string") data = JSON.parse(data);
-    const msgs: Record<string, any>[] = data?.allmsgs ?? [];
-    if (!msgs.length) console.error("preload returned no messages; keys:", Object.keys(data ?? {}));
-    for (const m of msgs) {
-      const group = groupIds.has(String(m.idTo));
-      const self = m.uidFrom === "0" || m.uidFrom === me.id;
-      ingest(m, group ? String(m.idTo) : self ? String(m.idTo) : String(m.uidFrom), group ? ThreadType.Group : ThreadType.User, false);
-    }
-    preloaded = msgs.length;
-  } catch (e) {
-    console.error("preload conversations failed:", e);
-  }
-  // Any group the preload did not cover: fetch its newest message, 6 requests at a time.
-  const missing = groups.filter((id) => !store!.thread(id)?.lastTs);
-  let filled = 0;
-  for (let i = 0; i < missing.length; i += 6)
-    await Promise.all(
-      missing.slice(i, i + 6).map((id) =>
-        api!.getGroupChatHistory(id, 1)
-          .then((h) => h.groupMsgs.forEach((g) => (ingest(g.data, id, ThreadType.Group, false), filled++)))
-          .catch((e) => console.error(`group ${id} history failed:`, e?.message ?? e)),
-      ),
-    );
-  return `${preloaded} from preload, ${filled}/${missing.length} groups filled from history`;
+async function preloadConversations() {
+  const a = api as any;
+  if (!a.preloadLastMsgs)
+    api!.custom("preloadLastMsgs", async ({ ctx, utils }) => {
+      const params = utils.encodeAES(JSON.stringify({ threadIdLocalMsgId: JSON.stringify({}), imei: ctx.imei }));
+      if (!params) throw new Error("encrypt failed");
+      // zca-js keeps the service map on the api object, not on ctx.
+      const host = a.zpwServiceMap?.conversation?.[0];
+      if (!host) throw new Error("no conversation service in login info");
+      const url = utils.makeURL(`${host}/api/preloadconvers/get-last-msgs`, { params });
+      return utils.resolve(await utils.request(url, { method: "GET" }));
+    });
+  let data = await a.preloadLastMsgs();
+  if (typeof data === "string") data = JSON.parse(data);
+  // Zalo PC merges three arrays into its local `allmsgs` (observed in the bundle): `msgs` are 1:1
+  // chats, `groupMsgs` are keyed by the group id in idTo, `pageMsgs` are Official Account chats.
+  const user = (m: Record<string, any>) => {
+    const self = m.uidFrom === "0" || m.uidFrom === me.id;
+    // idTo "0" from "0" is your chat with yourself.
+    const thread = self ? (m.idTo === "0" ? me.id : String(m.idTo)) : String(m.uidFrom);
+    ingest(m, thread, ThreadType.User, false);
+  };
+  const one: Record<string, any>[] = data?.msgs ?? [];
+  const grp: Record<string, any>[] = data?.groupMsgs ?? [];
+  const page: Record<string, any>[] = data?.pageMsgs ?? [];
+  one.forEach(user);
+  page.forEach(user);
+  for (const m of grp) ingest(m, String(m.idTo), ThreadType.Group, false);
+  return `${one.length} chats, ${grp.length} groups, ${page.length} official accounts`;
 }
 
 async function fetchPeople(ids: string[]) {
@@ -339,14 +329,6 @@ async function handle(r: Req): Promise<unknown> {
       const t = store.thread(r.threadId) ?? blankThread(r.threadId, r.type);
       if (t.unread) store.putThread({ ...t, unread: 0 });
       markSeen(r.threadId, t.type);
-      if (t.type === 1 && !r.before) {
-        try {
-          const h = await api.getGroupChatHistory(r.threadId, 50);
-          for (const g of h.groupMsgs) ingest(g.data, r.threadId, ThreadType.Group, false);
-        } catch (e) {
-          console.error("group history failed", e);
-        }
-      }
       return { thread: store.thread(r.threadId) ?? t, messages: store.page(r.threadId, r.before) };
     }
     case "close":

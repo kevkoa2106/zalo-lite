@@ -663,7 +663,7 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
         {messages?.length === 0 && (
           <div class="list-empty">
             <strong>Chưa có tin nhắn</strong>
-            {thread.type === 0 ? "Tin nhắn cũ chỉ có trên điện thoại. Tin nhắn mới sẽ được lưu ở đây." : "Hãy gửi lời chào tới nhóm."}
+            Tin nhắn cũ hơn chỉ có trên điện thoại. Tin nhắn mới sẽ được lưu ở đây.
           </div>
         )}
         {messages && messages.length > 0 && more && (

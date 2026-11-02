@@ -56,8 +56,9 @@ From the endpoint registry around @2911584 (all observed):
 | — | `/api/message/reaction` | reactions |
 | — | `/api/message/undo`, `/multi_undo`, `/delete` | recall / delete for me |
 | — | `/api/message/forward`, `/mforward` | forward |
-| — | `/api/group/getmg-v2` | group history page |
-| — | `/api/preloadconvers/get-last-msgs`, `/get-last-seen` | conversation list preload |
+| 12028 | `/api/group/getmg-v2` | group info for many groups (`gridVerMap`), not messages |
+| 11240 | `/api/group/history` | group history (`grid`, `count`). Only called on group rejoin behind feature flags; returns HTTP 404 for this client (observed live) |
+| 10053 | `/api/preloadconvers/get-last-msgs` | conversation list: GET on the `conversation` service with `{threadIdLocalMsgId: JSON(map), imei}`. Reply has `msgs` (1:1), `groupMsgs` (idTo = group id), `pageMsgs` (Official Accounts), `clearUnreads`, `more`, `lastActionId` (observed in bundle and live) |
 | — | `/api/conv/getUnreadMark`, `addUnreadMark`, `removeUnreadMark` | unread mark |
 | 11770 | `/keepalive` | HTTP keepalive |
 
