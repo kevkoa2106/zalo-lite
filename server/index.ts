@@ -115,7 +115,9 @@ async function ready(a: API) {
   });
   l.on("message", (m) => ingest(m.data, m.threadId, m.type, true));
   l.on("old_messages", (ms, type) => {
-    for (const m of ms) ingest(m.data, m.threadId, m.type, false);
+    console.log(`history sync: ${ms.length} ${type === ThreadType.User ? "1:1" : "group"} messages`);
+    // Push synced messages too, so a chat that is already open fills in without reopening it.
+    broadcast({ ev: "msgs", msgs: ms.map((m) => ingest(m.data, m.threadId, m.type, false)).filter(Boolean) });
     broadcast({ ev: "threads", threads: threadList() });
     // ponytail: zca-js hides the server's `more`/`lastActionId`, so page on the batch's highest
     // actionId and stop on an empty or non-advancing page; cap guards against a server that loops.
@@ -146,7 +148,9 @@ async function ready(a: API) {
     broadcast({ ev: "msg", msg: target });
   });
   l.on("seen_messages", (ms) => broadcast({ ev: "seen", items: ms.map((m) => ({ threadId: m.threadId, data: m.data })) }));
-  l.on("closed", (code) => {
+  l.on("connected", () => console.log("realtime connected"));
+  l.on("closed", (code, reason) => {
+    console.error(`realtime closed: ${code} ${reason}`);
     if (code === CloseReason.DuplicateConnection || code === CloseReason.KickConnection) setState({ state: "kicked" });
   });
   l.on("error", (e) => console.error("listener error", e));
@@ -189,7 +193,10 @@ async function preloadConversations(groups: string[]) {
       api!.custom("preloadLastMsgs", async ({ ctx, utils }) => {
         const params = utils.encodeAES(JSON.stringify({ threadIdLocalMsgId: JSON.stringify({}), imei: ctx.imei }));
         if (!params) throw new Error("encrypt failed");
-        const url = utils.makeURL(`${ctx.zpwServiceMap.conversation[0]}/api/preloadconvers/get-last-msgs`, { params });
+        // zca-js keeps the service map on the api object (see its getGroupChatHistory), not on ctx.
+        const host = a.zpwServiceMap?.conversation?.[0];
+        if (!host) throw new Error("no conversation service in login info");
+        const url = utils.makeURL(`${host}/api/preloadconvers/get-last-msgs`, { params });
         return utils.resolve(await utils.request(url, { method: "GET" }));
       });
     let data = await a.preloadLastMsgs();
@@ -248,6 +255,7 @@ function ingest(raw: Record<string, any>, threadId: string, type: ThreadType, li
     }).catch(() => {});
   }
   if (live) broadcast({ ev: "msg", msg: m, thread: store.thread(threadId) });
+  return m;
 }
 
 function touchThread(m: Msg, unread = false) {
@@ -437,6 +445,7 @@ Bun.serve({
       try {
         send(ws, { rid: r.rid, ok: true, data: await handle(r) });
       } catch (e) {
+        console.error(`${r.op} failed:`, e);
         send(ws, { rid: r.rid, ok: false, error: e instanceof Error ? e.message : String(e) });
       }
     },

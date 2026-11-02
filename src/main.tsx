@@ -222,6 +222,13 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
             setTyping((t) => (t[m.threadId]?.uid === m.from ? { ...t, [m.threadId]: { uid: "", until: 0 } } : t));
             break;
           }
+          case "msgs": // background history sync: fill chats that are already loaded
+            setMsgs((s) => {
+              let next = s;
+              for (const m of ev.msgs as Msg[]) if (next[m.threadId]) next = { ...next, [m.threadId]: upsert(next[m.threadId]!, m) };
+              return next;
+            });
+            break;
           case "deleted":
             setMsgs((s) => (s[ev.threadId] ? { ...s, [ev.threadId]: s[ev.threadId]!.filter((m) => m.id !== ev.msgId) } : s));
             break;
