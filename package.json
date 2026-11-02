@@ -1,10 +1,16 @@
 {
   "name": "zalo-lite",
-  "module": "index.ts",
   "type": "module",
   "private": true,
   "scripts": {
-    "typecheck": "bun check"
+    "dev:web": "vite",
+    "build:web": "vite build",
+    "server": "bun server/index.ts",
+    "sidecar": "bun build --compile --minify server/index.ts --outfile src-tauri/binaries/zalo-lite-server-$(rustc -vV | sed -n \"s/host: //p\")",
+    "dev": "bun run sidecar && tauri dev",
+    "build": "bun run sidecar && tauri build",
+    "test": "bun test server",
+    "typecheck": "tsc --noEmit -p ."
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.6",
