@@ -36,7 +36,7 @@ export type Thread = {
   previewFrom: string;
   members: number;
 };
-export type Contact = { id: string; type: 0 | 1; name: string; avatar: string };
+export type Contact = { id: string; type: 0 | 1; name: string; avatar: string; friend?: boolean };
 export type Me = { id: string; name: string; avatar: string };
 export type State =
   | { state: "boot" | "logged_out" | "qr_expired" | "kicked" }

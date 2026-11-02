@@ -24,7 +24,7 @@
   --accent-text: #66a6ff;
   --accent-subtle: #00183d;
   --danger: #ed6e6e;
-  --badge: #e94949;
+  --badge: #d91b1b;
   --success: #6acd8b;
   --bubble-me: #1f344d;
   --bubble-them: #282d33;
@@ -58,7 +58,7 @@
   --accent-text: #005ae0;
   --accent-subtle: #e5f1ff;
   --danger: #c31818;
-  --badge: #e94949;
+  --badge: #d91b1b;
   --success: #37b361;
   --bubble-me: #e5f1ff;
   --bubble-them: #fff;
@@ -115,6 +115,7 @@ img { display: block; }
   border-radius: 50%; flex: none; display: grid; place-items: center; color: #fff; font-weight: 600;
   background: linear-gradient(135deg, hsl(var(--h) 85% 62%), hsl(var(--h) 80% 48%));
 }
+.ph.docs { background: var(--accent); }
 
 /* ---------- conversation list ---------- */
 .list { background: var(--list); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-width: 0; }
@@ -172,7 +173,7 @@ img { display: block; }
 .welcome h1 { font-size: 22px; font-weight: 400; margin: 0; }
 .welcome h1 b { font-weight: 700; }
 .welcome p { margin: 0 auto; max-width: 460px; color: var(--text-2); line-height: 1.6; }
-.welcome .hint { margin-top: 18px; font-size: 13px; color: var(--text-3); }
+.welcome .hint { margin-top: 18px; font-size: 13px; color: var(--text-2); }
 .welcome kbd { font: inherit; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-strong); }
 
 .chat-head { height: 68px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--list); }

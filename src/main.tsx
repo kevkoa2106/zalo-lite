@@ -28,8 +28,14 @@ function openExternal(url: string) {
   else window.open(url, "_blank", "noopener");
 }
 
-function Avatar({ src, name, id, size: s = 48 }: { src?: string; name: string; id: string; size?: number }) {
+function Avatar({ src, name, id, size: s = 48, docs }: { src?: string; name: string; id: string; size?: number; docs?: boolean }) {
   const [broken, setBroken] = useState(false);
+  if (docs)
+    return (
+      <span class="ph docs" style={{ width: `${s}px`, height: `${s}px` }} aria-hidden="true">
+        <Icon name="folder" size={Math.round(s * 0.55)} />
+      </span>
+    );
   if (src && !broken)
     return <img class="avatar" src={src} alt="" width={s} height={s} loading="lazy" onError={() => setBroken(true)} />;
   return (
@@ -181,14 +187,19 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
   };
 
   // Bootstrap and live events.
+  const [loadError, setLoadError] = useState("");
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!up || kicked) return;
-    call<{ threads: Thread[]; contacts: Contact[] }>("bootstrap").then((d) => {
-      setThreads(Object.fromEntries(d.threads.map((t) => [t.id, t])));
-      setContacts(d.contacts);
-      setLoaded(true);
-    }).catch(() => {});
-  }, [up, kicked]);
+    setLoadError("");
+    call<{ threads: Thread[]; contacts: Contact[] }>("bootstrap")
+      .then((d) => {
+        setThreads(Object.fromEntries(d.threads.map((t) => [t.id, t])));
+        setContacts(d.contacts);
+        setLoaded(true);
+      })
+      .catch((e) => setLoadError(e.message));
+  }, [up, kicked, attempt]);
 
   useEffect(
     () =>
@@ -312,7 +323,10 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
         threads={threads}
         contacts={contacts}
         loaded={loaded}
+        loadError={loadError}
+        onRetry={() => setAttempt((n) => n + 1)}
         active={active}
+        meId={meId}
         searchRef={searchRef}
         onOpen={open}
       />
@@ -334,12 +348,13 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
             messages={msgs[thread.id]}
             setMessages={(f) => setMsgs((s) => ({ ...s, [thread.id]: f(s[thread.id] ?? []) }))}
             typingName={typingName}
+            friend={!!contacts.find((c) => c.id === thread.id)?.friend}
             flash={flash}
           />
         ) : (
           <div class="welcome">
             <h1>Chào mừng đến với <b>Zalo Lite</b>!</h1>
-            <p>Nhắn tin với người thân, bạn bè và đồng nghiệp ngay trên máy tính, nhẹ và nhanh hơn.</p>
+            <p>Nhắn tin với người thân, bạn bè và đồng nghiệp ngay trên máy tính. Chọn một cuộc trò chuyện để bắt đầu.</p>
             <p class="hint">
               Nhấn <kbd>{isMac ? "⌘" : "Ctrl"} F</kbd> để tìm cuộc trò chuyện
             </p>
@@ -366,7 +381,10 @@ function ConvList(p: {
   threads: Record<string, Thread>;
   contacts: Contact[];
   loaded: boolean;
+  loadError: string;
+  onRetry: () => void;
   active: string;
+  meId: string;
   searchRef: { current: HTMLInputElement | null };
   onOpen: (id: string, type: 0 | 1, name?: string, avatar?: string) => void;
 }) {
@@ -378,7 +396,14 @@ function ConvList(p: {
     return () => clearInterval(t);
   }, []);
 
-  const sorted = useMemo(() => Object.values(p.threads).filter((t) => t.lastTs > 0 || t.id === p.active).sort((a, b) => b.lastTs - a.lastTs), [p.threads, p.active]);
+  // Most recent first, as in Zalo. My Documents stays listed even before its first message.
+  const sorted = useMemo(
+    () =>
+      Object.values(p.threads)
+        .filter((t) => t.lastTs > 0 || t.id === p.active || t.id === p.meId)
+        .sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0)),
+    [p.threads, p.active, p.meId],
+  );
   const fq = fold(q.trim());
   const shownThreads = fq ? sorted.filter((t) => fold(t.name).includes(fq)) : tab === "unread" ? sorted.filter((t) => t.unread) : sorted;
   const shownContacts = fq ? p.contacts.filter((c) => !p.threads[c.id]?.lastTs && fold(c.name).includes(fq)).slice(0, 30) : [];
@@ -396,12 +421,6 @@ function ConvList(p: {
             </button>
           )}
         </label>
-        <button class="icon-btn" aria-label="Thêm bạn" title="Thêm bạn" disabled>
-          <Icon name="addFriend" size={20} />
-        </button>
-        <button class="icon-btn" aria-label="Tạo nhóm" title="Tạo nhóm" disabled>
-          <Icon name="addGroup" size={20} />
-        </button>
       </div>
       {p.view === "chats" && !fq ? (
         <div class="tabs" role="tablist">
@@ -418,12 +437,14 @@ function ConvList(p: {
 
   if (p.view === "contacts" && !fq) {
     const groups = p.contacts.filter((c) => c.type === 1).sort((a, b) => a.name.localeCompare(b.name, "vi"));
-    const friends = p.contacts.filter((c) => c.type === 0).sort((a, b) => a.name.localeCompare(b.name, "vi"));
+    const friends = p.contacts.filter((c) => c.type === 0 && c.friend).sort((a, b) => a.name.localeCompare(b.name, "vi"));
+    const docs = p.contacts.find((c) => c.id === p.meId);
     return (
       <aside class="list" aria-label="Danh bạ">
         {head}
         <ul class="items">
           {!p.contacts.length && <li class="list-empty">{p.loaded ? "Chưa có liên hệ nào" : "Đang tải danh bạ…"}</li>}
+          {docs && <ContactRow c={docs} docs onOpen={p.onOpen} />}
           {friends.length > 0 && <li class="section-label">Bạn bè ({friends.length})</li>}
           {friends.map((c) => <ContactRow c={c} onOpen={p.onOpen} />)}
           {groups.length > 0 && <li class="section-label">Nhóm ({groups.length})</li>}
@@ -437,7 +458,16 @@ function ConvList(p: {
     <aside class="list" aria-label="Danh sách trò chuyện">
       {head}
       <ul class="items">
-        {!p.loaded &&
+        {!p.loaded && p.loadError && (
+          <li class="list-empty" role="alert">
+            <strong>Không tải được danh sách trò chuyện</strong>
+            {p.loadError}
+            <button class="btn ghost" style={{ marginTop: "12px" }} onClick={p.onRetry}>
+              <Icon name="refresh" size={18} /> Thử lại
+            </button>
+          </li>
+        )}
+        {!p.loaded && !p.loadError &&
           Array.from({ length: 7 }, () => (
             <li class="skeleton" aria-hidden="true">
               <i style={{ width: "48px", height: "48px", borderRadius: "50%" }} />
@@ -462,7 +492,7 @@ function ConvList(p: {
         {shownThreads.map((t) => (
           <li>
             <button class={`item${t.unread ? " unread" : ""}`} aria-current={t.id === p.active} onClick={() => p.onOpen(t.id, t.type)}>
-              <Avatar src={t.avatar} name={t.name} id={t.id} />
+              <Avatar src={t.avatar} name={t.name} id={t.id} docs={t.id === p.meId} />
               <span class="body">
                 <span class="row">
                   <span class="name">{t.name}</span>
@@ -481,17 +511,17 @@ function ConvList(p: {
           </li>
         ))}
         {shownContacts.length > 0 && <li class="section-label">Liên hệ và nhóm</li>}
-        {shownContacts.map((c) => <ContactRow c={c} onOpen={p.onOpen} />)}
+        {shownContacts.map((c) => <ContactRow c={c} docs={c.id === p.meId} onOpen={p.onOpen} />)}
       </ul>
     </aside>
   );
 }
 
-function ContactRow({ c, onOpen }: { c: Contact; onOpen: (id: string, type: 0 | 1, name?: string, avatar?: string) => void }) {
+function ContactRow({ c, docs, onOpen }: { c: Contact; docs?: boolean; onOpen: (id: string, type: 0 | 1, name?: string, avatar?: string) => void }) {
   return (
     <li>
       <button class="item" style={{ height: "60px" }} onClick={() => onOpen(c.id, c.type, c.name, c.avatar)}>
-        <Avatar src={c.avatar} name={c.name} id={c.id} size={40} />
+        <Avatar src={c.avatar} name={c.name} id={c.id} size={40} docs={docs} />
         <span class="body"><span class="name">{c.name}</span></span>
       </button>
     </li>
@@ -507,13 +537,22 @@ type ChatProps = {
   messages: Msg[] | undefined;
   setMessages: (f: (m: Msg[]) => Msg[]) => void;
   typingName: string;
+  friend: boolean;
   flash: (t: string) => void;
 };
 
-function Chat({ thread, meId, meName, messages, setMessages, typingName, flash }: ChatProps) {
+function Chat({ thread, meId, meName, messages, setMessages, typingName, friend, flash }: ChatProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [more, setMore] = useState(true);
+  // A first page shorter than a full page means there is nothing older to load.
+  const sized = useRef(false);
+  useEffect(() => {
+    if (messages && !sized.current) {
+      sized.current = true;
+      setMore(messages.length >= 50);
+    }
+  }, [messages]);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [replyTo, setReplyTo] = useState<Msg | null>(null);
   const [viewer, setViewer] = useState("");
@@ -605,14 +644,18 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, flash }
   return (
     <>
       <header class="chat-head">
-        <Avatar src={thread.avatar} name={thread.name} id={thread.id} size={44} />
+        <Avatar src={thread.avatar} name={thread.name} id={thread.id} size={44} docs={thread.id === meId} />
         <div class="title">
           <h2>{thread.name}</h2>
           <div class="sub">
             {thread.type === 1 ? (
               <><Icon name="contacts" size={15} /> {thread.members || Object.keys(members).length || ""} thành viên</>
-            ) : (
+            ) : thread.id === meId ? (
+              "Lưu tin nhắn, ảnh và file cho riêng bạn"
+            ) : friend ? (
               "Bạn bè"
+            ) : (
+              "Người lạ"
             )}
           </div>
         </div>
@@ -733,7 +776,12 @@ function Bubble({ m, mine, last, meId, onReply, onView, flash }: {
         bare = true;
         body = (
           <span class="sticker">
-            <img src={`https://zalo-api.zadn.vn/api/emoticon/sticker/webpc?eid=${a.id}&size=130`} alt="Sticker" loading="lazy" />
+            <img
+              src={`https://zalo-api.zadn.vn/api/emoticon/sticker/webpc?eid=${a.id}&size=130`}
+              alt="Sticker"
+              loading="lazy"
+              onError={(e) => e.currentTarget.replaceWith(Object.assign(document.createElement("span"), { className: "bubble", textContent: "Sticker" }))}
+            />
           </span>
         );
         break;
@@ -942,7 +990,7 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend }: {
           rows={1}
           value={text}
           aria-label={`Nhập tin nhắn tới ${thread.name}`}
-          placeholder={`Nhập @, tin nhắn tới ${thread.name}`}
+          placeholder={`Nhập tin nhắn tới ${thread.name}`}
           onInput={(e) => {
             setText(e.currentTarget.value);
             if (Date.now() - lastTyping.current > 3000) {
