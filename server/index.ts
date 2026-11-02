@@ -223,6 +223,7 @@ let groupIds = new Set<string>();
 // Group history from the group-cloud service, as Zalo PC loads it (observed in the bundle):
 // GET /api/cm/getrecentv2 (newest, globalMsgId "0") or /api/cm/getoldv2 (older than globalMsgId)
 // with {groupId, globalMsgId, count, msgIds, imei, src}; reply carries `groupMsgs`.
+let loggedCloudHost = false;
 async function groupCloud(groupId: string, globalMsgId: string, count: number, old = false) {
   const a = api as any;
   if (!a.groupCloud)
@@ -235,8 +236,17 @@ async function groupCloud(groupId: string, globalMsgId: string, count: number, o
       if (!params) throw new Error("encrypt failed");
       // zca-js would stamp its own zpw_ver (685); the group-cloud service is newer, so send Zalo PC 26.10.20's 694.
       const url = utils.makeURL(`${host}/api/cm/${props.old ? "getoldv2" : "getrecentv2"}`, { params, zpw_ver: 694 });
-      return utils.resolve(await utils.request(url, { method: "GET" }));
+      // zca-js only attaches cookies scoped to the request's own origin. Code 604 (Common.SESSION in
+      // Zalo PC's error table) means the session cookie did not arrive, so also send chat.zalo.me's.
+      const jar = (await ctx.cookie.getCookieString("https://chat.zalo.me")).split("; ");
+      const own = (await ctx.cookie.getCookieString(new URL(host).origin)).split("; ");
+      const Cookie = [...new Set([...own, ...jar].filter(Boolean))].join("; ");
+      return utils.resolve(await utils.request(url, { method: "GET", headers: { Cookie } }));
     });
+  if (!loggedCloudHost) {
+    loggedCloudHost = true;
+    console.log("group cloud host:", new URL(a.zpwServiceMap?.group_cloud_message?.[0] ?? "http://none").host);
+  }
   let data = await a.groupCloud({ groupId, globalMsgId, count, old });
   if (typeof data === "string") data = JSON.parse(data);
   const msgs: Record<string, any>[] = data?.groupMsgs ?? [];
