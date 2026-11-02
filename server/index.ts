@@ -12,7 +12,6 @@ const PORT = Number(process.env.ZL_PORT ?? 17789);
 const TOKEN = process.env.ZL_TOKEN ?? "";
 const DATA = process.env.ZL_DATA ?? join(homedir(), "Library", "Application Support", "zalo-lite");
 const SESSION = join(DATA, "session.json");
-const MY_DOCS = "My Documents";
 const ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "http://localhost:1420", "http://127.0.0.1:1420"]);
 mkdirSync(DATA, { recursive: true });
 
@@ -99,8 +98,9 @@ async function ready(a: API) {
   } catch {}
   store = openStore(join(DATA, `${me.id}.db`));
   store.putPerson(me.id, me.name, me.avatar);
-  const docs = store.thread(me.id) ?? blankThread(me.id, 0);
-  store.putThread({ ...docs, name: MY_DOCS, avatar: "" });
+  // Zalo's My Documents is its own account and arrives like any other chat; drop the
+  // self-chat placeholder that earlier versions created under your own id.
+  store.delThread(me.id);
 
   const l = a.listener;
   // Offline sync, as Zalo PC does it (docs/PROTOCOL.md): cmd 510/511 from the last stored
@@ -160,26 +160,48 @@ async function ready(a: API) {
   syncContacts().catch((e) => console.error("contacts sync failed", e));
 }
 
+// Each step runs on its own: one failing call must not hide what the others found.
+// The list is pushed to the window after every step.
 async function syncContacts() {
-  const friends = await api!.getAllFriends();
-  for (const f of friends) store!.putPerson(f.userId, f.displayName || f.zaloName, f.avatar, true);
-  const ids = Object.keys((await api!.getAllGroups()).gridVerMap);
-  groupIds = new Set(ids);
-  await preloadConversations(ids);
-  // ponytail: sequential 50-id chunks; parallelise if accounts with thousands of groups feel slow.
-  for (let i = 0; i < ids.length; i += 50) {
-    const info = await api!.getGroupInfo(ids.slice(i, i + 50));
-    for (const [id, g] of Object.entries(info.gridInfoMap) as [string, any][]) {
-      const t = store!.thread(id) ?? blankThread(id, 1);
-      store!.putThread({ ...t, name: g.name, avatar: g.fullAvt || g.avt, members: g.totalMember ?? 0 });
+  const step = async (name: string, fn: () => Promise<unknown>) => {
+    try {
+      console.log(`sync ${name}: ${await fn()}`);
+    } catch (e) {
+      console.error(`sync ${name} failed:`, e);
     }
-  }
-  // Names for 1:1 threads with non-friends.
-  const unknown = store!.threads().filter((t) => t.type === 0 && !store!.person(t.id)).map((t) => t.id);
-  if (unknown.length) await fetchPeople(unknown);
-  for (const t of store!.threads()) if (t.type === 0) applyPerson(t);
-  broadcast({ ev: "threads", threads: threadList() });
-  broadcast({ ev: "contacts", contacts: contacts() });
+    if (!store) return;
+    broadcast({ ev: "threads", threads: threadList() });
+    broadcast({ ev: "contacts", contacts: contacts() });
+  };
+  let ids: string[] = [];
+  await step("friends", async () => {
+    const friends = await api!.getAllFriends();
+    for (const f of friends) store!.putPerson(f.userId, f.displayName || f.zaloName, f.avatar, true);
+    return friends.length;
+  });
+  await step("groups", async () => {
+    ids = Object.keys((await api!.getAllGroups()).gridVerMap);
+    groupIds = new Set(ids);
+    return ids.length;
+  });
+  await step("conversations", () => preloadConversations(ids));
+  await step("group info", async () => {
+    // ponytail: sequential 50-id chunks; parallelise if accounts with thousands of groups feel slow.
+    for (let i = 0; i < ids.length; i += 50) {
+      const info = await api!.getGroupInfo(ids.slice(i, i + 50));
+      for (const [id, g] of Object.entries(info.gridInfoMap) as [string, any][]) {
+        const t = store!.thread(id) ?? blankThread(id, 1);
+        store!.putThread({ ...t, name: g.name, avatar: g.fullAvt || g.avt, members: g.totalMember ?? 0 });
+      }
+    }
+    return ids.length;
+  });
+  await step("names", async () => {
+    const unknown = store!.threads().filter((t) => t.type === 0 && !store!.person(t.id)).map((t) => t.id);
+    for (let i = 0; i < unknown.length; i += 50) await fetchPeople(unknown.slice(i, i + 50));
+    for (const t of store!.threads()) if (t.type === 0) applyPerson(t);
+    return unknown.length;
+  });
 }
 
 let groupIds = new Set<string>();
@@ -187,6 +209,7 @@ let groupIds = new Set<string>();
 // The conversation list: latest message of every conversation, groups included.
 // Same call Zalo PC makes at startup (getLastMessagesForPreview → /api/preloadconvers/get-last-msgs).
 async function preloadConversations(groups: string[]) {
+  let preloaded = 0;
   try {
     const a = api as any;
     if (!a.preloadLastMsgs)
@@ -202,24 +225,28 @@ async function preloadConversations(groups: string[]) {
     let data = await a.preloadLastMsgs();
     if (typeof data === "string") data = JSON.parse(data);
     const msgs: Record<string, any>[] = data?.allmsgs ?? [];
+    if (!msgs.length) console.error("preload returned no messages; keys:", Object.keys(data ?? {}));
     for (const m of msgs) {
       const group = groupIds.has(String(m.idTo));
       const self = m.uidFrom === "0" || m.uidFrom === me.id;
       ingest(m, group ? String(m.idTo) : self ? String(m.idTo) : String(m.uidFrom), group ? ThreadType.Group : ThreadType.User, false);
     }
-    if (msgs.length) return;
+    preloaded = msgs.length;
   } catch (e) {
-    console.error("preload conversations failed, falling back to group history", e);
+    console.error("preload conversations failed:", e);
   }
-  // Fallback: newest message of each group, 6 requests at a time.
-  for (let i = 0; i < groups.length; i += 6)
+  // Any group the preload did not cover: fetch its newest message, 6 requests at a time.
+  const missing = groups.filter((id) => !store!.thread(id)?.lastTs);
+  let filled = 0;
+  for (let i = 0; i < missing.length; i += 6)
     await Promise.all(
-      groups.slice(i, i + 6).map((id) =>
+      missing.slice(i, i + 6).map((id) =>
         api!.getGroupChatHistory(id, 1)
-          .then((h) => h.groupMsgs.forEach((g) => ingest(g.data, id, ThreadType.Group, false)))
-          .catch(() => {}),
+          .then((h) => h.groupMsgs.forEach((g) => (ingest(g.data, id, ThreadType.Group, false), filled++)))
+          .catch((e) => console.error(`group ${id} history failed:`, e?.message ?? e)),
       ),
     );
+  return `${preloaded} from preload, ${filled}/${missing.length} groups filled from history`;
 }
 
 async function fetchPeople(ids: string[]) {
@@ -275,11 +302,10 @@ function touchThread(m: Msg, unread = false) {
   return t;
 }
 
-// My Documents (your chat with yourself) always shows, like in Zalo; other threads once they have a message.
+// Conversations with at least one message, newest first.
 const threadList = () =>
-  store!.threads().filter((t) => t.lastTs > 0 || t.id === me.id).sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0));
+  store!.threads().filter((t) => t.lastTs > 0).sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0));
 const contacts = () => [
-  { id: me.id, type: 0, name: MY_DOCS, avatar: "", friend: false },
   ...store!.people().filter((p) => p.id !== me.id).map((p) => ({ id: p.id, type: 0, name: p.name, avatar: p.avatar, friend: !!p.friend })),
   ...store!.threads().filter((t) => t.type === 1).map((t) => ({ id: t.id, type: 1, name: t.name, avatar: t.avatar, friend: false })),
 ];

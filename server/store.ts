@@ -72,6 +72,7 @@ export function openStore(file: string) {
       (q.page.all(thread, before, limit) as { json: string }[]).map((r) => JSON.parse(r.json) as Msg).reverse(),
     thread: (id: string) => parse<Thread>(q.getThread.get(id)),
     putThread: (t: Thread) => q.putThread.run(t.id, JSON.stringify(t)),
+    delThread: (id: string) => db.run("DELETE FROM threads WHERE id = ?", [id]),
     threads: () => (q.threads.all() as { json: string }[]).map((r) => JSON.parse(r.json) as Thread),
     person: (id: string) => q.getPerson.get(id) as { name: string; avatar: string; friend: number } | null,
     putPerson: (id: string, name: string, avatar: string, friend = false) => q.putPerson.run(id, name, avatar, friend ? 1 : 0),

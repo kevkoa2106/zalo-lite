@@ -115,7 +115,6 @@ img { display: block; }
   border-radius: 50%; flex: none; display: grid; place-items: center; color: #fff; font-weight: 600;
   background: linear-gradient(135deg, hsl(var(--h) 85% 62%), hsl(var(--h) 80% 48%));
 }
-.ph.docs { background: var(--accent); }
 
 /* ---------- conversation list ---------- */
 .list { background: var(--list); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-width: 0; }
