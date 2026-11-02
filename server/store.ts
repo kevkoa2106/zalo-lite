@@ -48,6 +48,7 @@ export function openStore(file: string) {
     putMsg: db.prepare("INSERT OR REPLACE INTO msgs (id, thread, ts, json) VALUES (?, ?, ?, ?)"),
     getMsg: db.prepare("SELECT json FROM msgs WHERE id = ?"),
     page: db.prepare("SELECT json FROM msgs WHERE thread = ? AND ts < ? ORDER BY ts DESC LIMIT ?"),
+    oldest: db.prepare("SELECT json FROM msgs WHERE thread = ? ORDER BY ts ASC LIMIT 1"),
     putThread: db.prepare("INSERT OR REPLACE INTO threads (id, json) VALUES (?, ?)"),
     getThread: db.prepare("SELECT json FROM threads WHERE id = ?"),
     threads: db.prepare("SELECT json FROM threads"),
@@ -70,6 +71,7 @@ export function openStore(file: string) {
     /** Newest-last page of messages older than `before`. */
     page: (thread: string, before = Number.MAX_SAFE_INTEGER, limit = 50) =>
       (q.page.all(thread, before, limit) as { json: string }[]).map((r) => JSON.parse(r.json) as Msg).reverse(),
+    oldest: (thread: string) => parse<Msg>(q.oldest.get(thread)),
     thread: (id: string) => parse<Thread>(q.getThread.get(id)),
     putThread: (t: Thread) => q.putThread.run(t.id, JSON.stringify(t)),
     delThread: (id: string) => db.run("DELETE FROM threads WHERE id = ?", [id]),

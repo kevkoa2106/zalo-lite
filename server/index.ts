@@ -185,6 +185,18 @@ async function syncContacts() {
     return ids.length;
   });
   await step("conversations", () => preloadConversations());
+  await step("group messages", async () => {
+    let n = 0;
+    for (let i = 0; i < ids.length; i += 6)
+      await Promise.all(
+        ids.slice(i, i + 6).map((id) =>
+          groupCloud(id, "0", 30)
+            .then((ms) => (n += ms.length))
+            .catch((e) => console.error(`group ${id} cloud history failed:`, e?.message ?? e)),
+        ),
+      );
+    return `${n} messages across ${ids.length} groups`;
+  });
   await step("group info", async () => {
     // ponytail: sequential 50-id chunks; parallelise if accounts with thousands of groups feel slow.
     for (let i = 0; i < ids.length; i += 50) {
@@ -208,6 +220,28 @@ let groupIds = new Set<string>();
 
 // The conversation list: latest message of every conversation, groups included.
 // Same call Zalo PC makes at startup (getLastMessagesForPreview → /api/preloadconvers/get-last-msgs).
+// Group history from the group-cloud service, as Zalo PC loads it (observed in the bundle):
+// GET /api/cm/getrecentv2 (newest, globalMsgId "0") or /api/cm/getoldv2 (older than globalMsgId)
+// with {groupId, globalMsgId, count, msgIds, imei, src}; reply carries `groupMsgs`.
+async function groupCloud(groupId: string, globalMsgId: string, count: number, old = false) {
+  const a = api as any;
+  if (!a.groupCloud)
+    api!.custom("groupCloud", async ({ ctx, utils, props }) => {
+      const host = a.zpwServiceMap?.group_cloud_message?.[0];
+      if (!host) throw new Error("no group_cloud_message service in login info");
+      const params = utils.encodeAES(
+        JSON.stringify({ groupId: props.groupId, globalMsgId: props.globalMsgId, count: props.count, msgIds: [], imei: ctx.imei, src: -1 }),
+      );
+      if (!params) throw new Error("encrypt failed");
+      const url = utils.makeURL(`${host}/api/cm/${props.old ? "getoldv2" : "getrecentv2"}`, { params });
+      return utils.resolve(await utils.request(url, { method: "GET" }));
+    });
+  let data = await a.groupCloud({ groupId, globalMsgId, count, old });
+  if (typeof data === "string") data = JSON.parse(data);
+  const msgs: Record<string, any>[] = data?.groupMsgs ?? [];
+  return msgs.map((m) => ingest(m, groupId, ThreadType.Group, false)).filter((m): m is Msg => !!m);
+}
+
 async function preloadConversations() {
   const a = api as any;
   if (!a.preloadLastMsgs)
@@ -328,6 +362,18 @@ async function handle(r: Req): Promise<unknown> {
       activeThread = r.threadId;
       const t = store.thread(r.threadId) ?? blankThread(r.threadId, r.type);
       if (t.unread) store.putThread({ ...t, unread: 0 });
+      if (t.type === 1) {
+        try {
+          if (!r.before) await groupCloud(r.threadId, "0", 50);
+          else if (store.page(r.threadId, r.before).length < 50) {
+            // Ran out of local messages: ask the server for the page before the oldest one we have.
+            const oldest = store.oldest(r.threadId);
+            if (oldest) await groupCloud(r.threadId, oldest.id, 50, true);
+          }
+        } catch (e) {
+          console.error("group cloud history failed:", e);
+        }
+      }
       markSeen(r.threadId, t.type);
       return { thread: store.thread(r.threadId) ?? t, messages: store.page(r.threadId, r.before) };
     }

@@ -77,3 +77,10 @@ Observed (`_getHeader`, `_processEventBlob`, `_onRawData`, `_decrypt`, `_decompr
 ## What this client uses
 
 `server/` (Bun) talks to Zalo through `zca-js`, which implements every step above. The Tauri app (`src-tauri/`) starts that server as a sidecar, and the UI (`src/`) talks to it over a local WebSocket guarded by a random token.
+
+## History sources (confirmed against a live account, 2026-11-02)
+
+- **Conversation preload** (`/api/preloadconvers/get-last-msgs` with an empty map) only returns activity since this device logged in. It does not list past conversations on a new device.
+- **WS 510/511 offline queue** starting at `lastId: "1"` also returns nothing on a new device.
+- **Group history** comes from the `group_cloud_message` service: `GET /api/cm/getrecentv2` (newest; `globalMsgId: "0"`) and `/api/cm/getoldv2` (older than `globalMsgId`), params `{groupId, globalMsgId, count, msgIds: [], imei, src: -1}`, reply `groupMsgs` (+ `hasMore`). Observed in `getCloudMessage` (cmd 12506/12507).
+- **1:1 history** is only on the phone. Zalo PC pulls it with an encrypted phone-to-PC transfer: `/api/message/pull_mobile_msg` (`pc_name`, `public_key`, `from_seq_id`, `min_seq_id`, `temp_key`, `imei`), `/api/transfer-sync-v2/request-sync`, `/api/message/get_crossdb`, `/api/message/delete_snapshot_mobile_msg`. Not implemented here.
