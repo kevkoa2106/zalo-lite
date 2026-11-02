@@ -1,0 +1,377 @@
+// Local backend for the Tauri UI. Talks to Zalo through zca-js (see docs/PROTOCOL.md)
+// and exposes one WebSocket on 127.0.0.1 that the UI uses for requests and live events.
+import { Zalo, ThreadType, LoginQRCallbackEventType, CloseReason, type API } from "zca-js";
+import { mkdirSync, existsSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ServerWebSocket } from "bun";
+import { openStore, type Msg, type Store, type Thread } from "./store";
+import { normalize, previewOf } from "./normalize";
+
+const PORT = Number(process.env.ZL_PORT ?? 17789);
+const TOKEN = process.env.ZL_TOKEN ?? "";
+const DATA = process.env.ZL_DATA ?? join(homedir(), "Library", "Application Support", "zalo-lite");
+const SESSION = join(DATA, "session.json");
+mkdirSync(DATA, { recursive: true });
+
+type State =
+  | { state: "boot" | "logged_out" }
+  | { state: "qr"; qr: string }
+  | { state: "qr_expired" }
+  | { state: "scanned"; name: string; avatar: string }
+  | { state: "ready"; me: { id: string; name: string; avatar: string } }
+  | { state: "kicked" | "error"; error?: string };
+
+let state: State = { state: "boot" };
+let api: API | null = null;
+let store: Store | null = null;
+let me = { id: "", name: "", avatar: "" };
+let qrActions: { retry: () => unknown; abort: () => unknown } | null = null;
+let activeThread = "";
+const clients = new Set<ServerWebSocket<unknown>>();
+
+const send = (ws: ServerWebSocket<unknown>, data: unknown) => ws.send(JSON.stringify(data));
+const broadcast = (data: unknown) => {
+  const s = JSON.stringify(data);
+  for (const ws of clients) ws.send(s);
+};
+const setState = (s: State) => broadcast({ ev: "state", ...(state = s) });
+
+// ---------- session ----------
+
+const zalo = () => new Zalo({ selfListen: true, logging: false, checkUpdate: false });
+
+async function resume() {
+  if (!existsSync(SESSION)) return setState({ state: "logged_out" });
+  try {
+    await ready(await zalo().login(await Bun.file(SESSION).json()));
+  } catch (e) {
+    console.error("resume failed", e);
+    setState({ state: "logged_out" });
+  }
+}
+
+async function loginQR() {
+  qrActions?.abort();
+  try {
+    const a = await zalo().loginQR({}, async (ev) => {
+      if (ev.actions) qrActions = ev.actions;
+      switch (ev.type) {
+        case LoginQRCallbackEventType.QRCodeGenerated:
+          return setState({ state: "qr", qr: ev.data.image });
+        case LoginQRCallbackEventType.QRCodeExpired:
+          return setState({ state: "qr_expired" });
+        case LoginQRCallbackEventType.QRCodeScanned:
+          return setState({ state: "scanned", name: ev.data.display_name, avatar: ev.data.avatar });
+        case LoginQRCallbackEventType.QRCodeDeclined:
+          return setState({ state: "qr_expired" });
+        case LoginQRCallbackEventType.GotLoginInfo:
+          await Bun.write(SESSION, JSON.stringify(ev.data));
+      }
+    });
+    qrActions = null;
+    if (a) await ready(a);
+  } catch (e) {
+    console.error("qr login failed", e);
+    setState({ state: "error", error: String(e) });
+  }
+}
+
+async function logout() {
+  api?.listener.stop();
+  api = null;
+  store?.close();
+  store = null;
+  rmSync(SESSION, { force: true });
+  setState({ state: "logged_out" });
+}
+
+// ---------- sync ----------
+
+async function ready(a: API) {
+  api = a;
+  me.id = a.getOwnId();
+  try {
+    const { profile } = await a.fetchAccountInfo();
+    me = { id: me.id, name: profile.displayName || profile.zaloName, avatar: profile.avatar };
+  } catch {}
+  store = openStore(join(DATA, `${me.id}.db`));
+  store.putPerson(me.id, me.name, me.avatar);
+
+  const l = a.listener;
+  l.on("connected", () => {
+    l.requestOldMessages(ThreadType.User);
+    l.requestOldMessages(ThreadType.Group);
+  });
+  l.on("message", (m) => ingest(m.data, m.threadId, m.type, true));
+  l.on("old_messages", (ms) => {
+    for (const m of ms) ingest(m.data, m.threadId, m.type, false);
+    broadcast({ ev: "threads", threads: threadList() });
+  });
+  l.on("typing", (t) => broadcast({ ev: "typing", threadId: t.threadId, uid: (t.data as any).uid }));
+  l.on("reaction", (r) => {
+    const d = r.data as any;
+    const target = store?.msg(String(d.content?.rMsg?.[0]?.gMsgID ?? ""));
+    if (!target) return;
+    const uid = r.isSelf ? me.id : String(d.uidFrom);
+    if (d.content.rType === -1 || !d.content.rIcon) delete target.reactions[uid];
+    else target.reactions[uid] = d.content.rIcon;
+    store!.putMsg(target);
+    broadcast({ ev: "msg", msg: target });
+  });
+  l.on("undo", (u) => {
+    const target = store?.msg(String((u.data as any).content?.globalMsgId ?? ""));
+    if (!target) return;
+    target.undone = true;
+    store!.putMsg(target);
+    touchThread(target);
+    broadcast({ ev: "msg", msg: target });
+  });
+  l.on("seen_messages", (ms) => broadcast({ ev: "seen", items: ms.map((m) => ({ threadId: m.threadId, data: m.data })) }));
+  l.on("closed", (code) => {
+    if (code === CloseReason.DuplicateConnection || code === CloseReason.KickConnection) setState({ state: "kicked" });
+  });
+  l.on("error", (e) => console.error("listener error", e));
+  l.start({ retryOnClose: true });
+
+  setState({ state: "ready", me });
+  syncContacts().catch((e) => console.error("contacts sync failed", e));
+}
+
+async function syncContacts() {
+  const friends = await api!.getAllFriends();
+  for (const f of friends) store!.putPerson(f.userId, f.displayName || f.zaloName, f.avatar);
+  const ids = Object.keys((await api!.getAllGroups()).gridVerMap);
+  // ponytail: sequential 50-id chunks; parallelise if accounts with thousands of groups feel slow.
+  for (let i = 0; i < ids.length; i += 50) {
+    const info = await api!.getGroupInfo(ids.slice(i, i + 50));
+    for (const [id, g] of Object.entries(info.gridInfoMap) as [string, any][]) {
+      const t = store!.thread(id) ?? blankThread(id, 1);
+      store!.putThread({ ...t, name: g.name, avatar: g.fullAvt || g.avt, members: g.totalMember ?? 0 });
+    }
+  }
+  // Names for 1:1 threads with non-friends.
+  const unknown = store!.threads().filter((t) => t.type === 0 && !store!.person(t.id)).map((t) => t.id);
+  if (unknown.length) await fetchPeople(unknown);
+  for (const t of store!.threads()) if (t.type === 0) applyPerson(t);
+  broadcast({ ev: "threads", threads: threadList() });
+  broadcast({ ev: "contacts", contacts: contacts() });
+}
+
+async function fetchPeople(ids: string[]) {
+  const res = await api!.getUserInfo(ids);
+  for (const [id, p] of Object.entries(res.changed_profiles ?? {}) as [string, any][])
+    store!.putPerson(id.split("_")[0]!, p.displayName || p.zaloName, p.avatar);
+}
+
+function applyPerson(t: Thread) {
+  const p = store!.person(t.id);
+  if (p && (p.name !== t.name || p.avatar !== t.avatar)) store!.putThread({ ...t, name: p.name, avatar: p.avatar });
+}
+
+const blankThread = (id: string, type: 0 | 1): Thread => ({
+  id, type, name: id, avatar: "", unread: 0, lastTs: 0, preview: "", previewKind: "text", previewFrom: "", members: 0,
+});
+
+const pendingPeople = new Set<string>();
+function ingest(raw: Record<string, any>, threadId: string, type: ThreadType, live: boolean) {
+  if (!store) return;
+  const m = normalize(raw, threadId, type as 0 | 1, me.id);
+  const prev = store.msg(m.id);
+  if (prev) m.reactions = prev.reactions;
+  store.putMsg(m);
+  if (m.from !== me.id && m.dName && !store.person(m.from)) store.putPerson(m.from, m.dName, "");
+  const t = touchThread(m, live && !prev && m.from !== me.id && threadId !== activeThread);
+  if (type === 0 && t.name === t.id && !pendingPeople.has(t.id)) {
+    pendingPeople.add(t.id);
+    fetchPeople([t.id]).then(() => {
+      applyPerson(store!.thread(t.id)!);
+      broadcast({ ev: "thread", thread: store!.thread(t.id) });
+    }).catch(() => {});
+  }
+  if (live) broadcast({ ev: "msg", msg: m, thread: store.thread(threadId) });
+}
+
+function touchThread(m: Msg, unread = false) {
+  const t = store!.thread(m.threadId) ?? blankThread(m.threadId, m.type);
+  if (m.type === 0 && t.name === t.id) {
+    const p = store!.person(m.threadId);
+    if (p) Object.assign(t, { name: p.name, avatar: p.avatar || t.avatar });
+  }
+  if (m.ts >= t.lastTs) {
+    t.lastTs = m.ts;
+    t.preview = previewOf(m);
+    t.previewKind = m.undone ? "text" : m.kind;
+    t.previewFrom = m.from === me.id ? "Bạn" : m.type === 1 ? m.dName : "";
+  }
+  if (unread) t.unread++;
+  store!.putThread(t);
+  return t;
+}
+
+const threadList = () => store!.threads().filter((t) => t.lastTs > 0).sort((a, b) => b.lastTs - a.lastTs);
+const contacts = () => [
+  ...store!.people().filter((p) => p.id !== me.id).map((p) => ({ id: p.id, type: 0, name: p.name, avatar: p.avatar })),
+  ...store!.threads().filter((t) => t.type === 1).map((t) => ({ id: t.id, type: 1, name: t.name, avatar: t.avatar })),
+];
+
+// ---------- requests from the UI ----------
+
+type Req = { op: string; rid?: number; [k: string]: any };
+
+async function handle(r: Req): Promise<unknown> {
+  switch (r.op) {
+    case "login_qr": return void loginQR();
+    case "qr_retry": return void (qrActions ? qrActions.retry() : loginQR());
+    case "logout": return logout();
+  }
+  if (!api || !store) throw new Error("not logged in");
+  const msg = (id: string) => {
+    const m = store!.msg(id);
+    if (!m) throw new Error("unknown message");
+    return m;
+  };
+  switch (r.op) {
+    case "bootstrap":
+      return { threads: threadList(), contacts: contacts() };
+    case "open": {
+      activeThread = r.threadId;
+      const t = store.thread(r.threadId) ?? blankThread(r.threadId, r.type);
+      if (t.unread) store.putThread({ ...t, unread: 0 });
+      markSeen(r.threadId, t.type);
+      if (t.type === 1 && !r.before) {
+        try {
+          const h = await api.getGroupChatHistory(r.threadId, 50);
+          for (const g of h.groupMsgs) ingest(g.data, r.threadId, ThreadType.Group, false);
+        } catch (e) {
+          console.error("group history failed", e);
+        }
+      }
+      return { thread: store.thread(r.threadId) ?? t, messages: store.page(r.threadId, r.before) };
+    }
+    case "close":
+      activeThread = "";
+      return;
+    case "send": {
+      const quote = r.quoteId ? msg(r.quoteId).raw : undefined;
+      const res = await api.sendMessage({ msg: r.text, quote: quote as any }, r.threadId, r.type);
+      return echo(r, res.message?.msgId, r.text, r.quoteId);
+    }
+    case "files": {
+      const dir = join(tmpdir(), "zalo-lite-upload", crypto.randomUUID());
+      mkdirSync(dir, { recursive: true });
+      const paths: string[] = [];
+      for (const f of r.files as { name: string; b64: string }[]) {
+        const p = join(dir, f.name.replace(/[\\/]/g, "_"));
+        await Bun.write(p, Buffer.from(f.b64, "base64"));
+        paths.push(p);
+      }
+      try {
+        await api.sendMessage({ msg: r.text ?? "", attachments: paths }, r.threadId, r.type);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+      return;
+    }
+    case "react": {
+      const m = msg(r.msgId);
+      await api.addReaction(r.icon, { data: { msgId: m.id, cliMsgId: m.cliMsgId }, threadId: m.threadId, type: m.type as ThreadType });
+      m.reactions[me.id] = r.icon;
+      store.putMsg(m);
+      broadcast({ ev: "msg", msg: m });
+      return;
+    }
+    case "undo": {
+      const m = msg(r.msgId);
+      await api.undo({ msgId: m.id, cliMsgId: m.cliMsgId }, m.threadId, m.type as ThreadType);
+      m.undone = true;
+      store.putMsg(m);
+      touchThread(m);
+      broadcast({ ev: "msg", msg: m, thread: store.thread(m.threadId) });
+      return;
+    }
+    case "delete": {
+      const m = msg(r.msgId);
+      await api.deleteMessage({ data: { cliMsgId: m.cliMsgId, msgId: m.id, uidFrom: m.from }, threadId: m.threadId, type: m.type as ThreadType }, true);
+      store.delMsg(m.id);
+      broadcast({ ev: "deleted", msgId: m.id, threadId: m.threadId });
+      return;
+    }
+    case "typing":
+      return api.sendTypingEvent(r.threadId, r.type);
+    case "members": {
+      const info = await api.getGroupInfo(r.threadId);
+      const g = (info.gridInfoMap as any)[r.threadId];
+      const ids: string[] = g?.memVerList?.map((s: string) => s.split("_")[0]) ?? [];
+      const missing = ids.filter((id) => !store!.person(id));
+      if (missing.length) await fetchPeople(missing);
+      return ids.map((id) => ({ id, ...(store!.person(id) ?? { name: id, avatar: "" }) }));
+    }
+  }
+  throw new Error(`unknown op ${r.op}`);
+}
+
+// The server confirms a send with only the msgId; store a local copy so the
+// bubble shows immediately. The selfListen echo later overwrites it with full data.
+function echo(r: Req, msgId: number | undefined, text: string, quoteId?: string) {
+  if (!msgId) return;
+  const q = quoteId ? store!.msg(quoteId) : null;
+  const m: Msg = {
+    id: String(msgId), cliMsgId: "", threadId: r.threadId, type: r.type, from: me.id, dName: me.name, ts: Date.now(),
+    kind: "text", text, attach: null, undone: false, reactions: {},
+    quote: q ? { from: q.from, dName: q.dName, text: previewOf(q) } : null,
+    raw: { msgId: String(msgId), uidFrom: "0", msgType: "webchat", content: text, ts: String(Date.now()) },
+  };
+  if (!store!.msg(m.id)) {
+    store!.putMsg(m);
+    touchThread(m);
+  }
+  const saved = store!.msg(m.id)!;
+  broadcast({ ev: "msg", msg: saved, thread: store!.thread(r.threadId) });
+  return saved;
+}
+
+function markSeen(threadId: string, type: 0 | 1) {
+  const unseen = store!.page(threadId, undefined, 20).filter((m) => m.from !== me.id).map((m) => m.raw as any);
+  if (!unseen.length) return;
+  api!.sendSeenEvent(type === 1 ? unseen : unseen.slice(-1), type as ThreadType).catch(() => {});
+}
+
+// ---------- local socket ----------
+
+Bun.serve({
+  hostname: "127.0.0.1",
+  port: PORT,
+  fetch(req, server) {
+    const url = new URL(req.url);
+    if (TOKEN && url.searchParams.get("token") !== TOKEN) return new Response("forbidden", { status: 403 });
+    if (server.upgrade(req)) return;
+    return new Response("zalo-lite backend");
+  },
+  websocket: {
+    maxPayloadLength: 128 * 1024 * 1024,
+    open(ws) {
+      clients.add(ws);
+      send(ws, { ev: "state", ...state });
+    },
+    close(ws) {
+      clients.delete(ws);
+    },
+    async message(ws, data) {
+      let r: Req;
+      try {
+        r = JSON.parse(String(data));
+      } catch {
+        return;
+      }
+      try {
+        send(ws, { rid: r.rid, ok: true, data: await handle(r) });
+      } catch (e) {
+        send(ws, { rid: r.rid, ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    },
+  },
+});
+
+console.log(`zalo-lite backend on 127.0.0.1:${PORT}`);
+resume();
