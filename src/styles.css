@@ -227,7 +227,14 @@ img { display: block; }
 .sticker-grid button:hover { background: var(--hover); }
 .sticker-grid img { width: 72px; height: 72px; object-fit: contain; }
 .sticker-grid .sticker-loading { width: auto; height: auto; aspect-ratio: 1; }
-.sticker-empty { margin: 0; padding: 8px 2px 4px; font-size: 13px; color: var(--text-2); }
+.sticker-empty { grid-column: 1 / -1; margin: 0; padding: 8px 2px 4px; font-size: 13px; color: var(--text-2); }
+.pack-tabs { display: flex; gap: 2px; overflow-x: auto; margin: 0 -6px -6px; padding: 4px 6px; border-top: 1px solid var(--border); }
+.pack-tabs button { flex: none; width: 40px; height: 40px; border-radius: 8px; display: grid; place-items: center; color: var(--text-2); transition: background-color 0.12s; }
+.pack-tabs button:hover { background: var(--hover); }
+.pack-tabs button[aria-selected="true"] { background: var(--selected); color: var(--accent-text); }
+.pack-tabs img { width: 28px; height: 28px; object-fit: contain; }
+.pack-initial { font-size: 12px; font-weight: 600; }
+.pack-loading { width: 40px; height: 40px; border-radius: 8px; }
 
 /* failed send */
 .failed-actions { display: flex; gap: 4px; }

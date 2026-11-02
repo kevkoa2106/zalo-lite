@@ -85,3 +85,9 @@ Observed (`_getHeader`, `_processEventBlob`, `_onRawData`, `_decrypt`, `_decompr
 - **Group history** comes from the `group_cloud_message` service: `GET /api/cm/getrecentv2` (newest; `globalMsgId: "0"`) and `/api/cm/getoldv2` (older than `globalMsgId`), params `{groupId, globalMsgId, count, msgIds: [], imei, src: -1}`, reply `groupMsgs` (+ `hasMore`). Observed in `getCloudMessage` (cmd 12506/12507).
 - **1:1 history** is only on the phone. Zalo PC pulls it with an encrypted phone-to-PC transfer: `/api/message/pull_mobile_msg` (`pc_name`, `public_key`, `from_seq_id`, `min_seq_id`, `temp_key`, `imei`), `/api/transfer-sync-v2/request-sync`, `/api/message/get_crossdb`, `/api/message/delete_snapshot_mobile_msg`. Not implemented here.
 - Group-cloud calls from this client returned error **604**, which Zalo PC's error table names `Common.SESSION` (session not accepted by that service).
+
+## Stickers (observed in the bundle)
+
+- **Your packs**: `GET {sticker}/api/message/sticker/category/list/v2` with `params = AES("")` (cmd 12020). Reply `{dataUrl, cs, data, exCateIds}`: the pack list is the JSON array at `dataUrl` (checked by Zalo PC as `MD5(body + salt) === cs`), else the inline `data`; packs in `exCateIds` are dropped; sorted by `type` then `status` (status 4 ranks as 0).
+- **Pack contents**: `GET {sticker}/api/message/sticker/category/sticker_detail` with `{"cid": "<id>"}` (cmd 11284), wrapped by zca-js as `getStickerCategoryDetail`.
+- **Search / detail / send**: zca-js `getStickers(keyword)`, `getStickersDetail(ids)`, `sendSticker({id, cateId, type})`.

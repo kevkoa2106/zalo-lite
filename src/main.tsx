@@ -976,32 +976,67 @@ function Bubble({ m, mine, last, meId, onReply, onView, flash, onRetry, onDismis
 
 // ---------- composer ----------
 
-// Recently used stickers first; typing searches Zalo's sticker catalogue (debounced).
+type Pack = { id: number; name: string; icon: string };
+const RECENT = -1;
+// Pack lists and pack contents survive closing the picker for the rest of the session.
+const packCache: { packs?: Pack[]; stickers: Map<number, Sticker[]> } = { stickers: new Map() };
+
+// Zalo's sticker panel: your packs as tabs along the bottom ("Gần đây" first), search on top.
 function StickerPicker({ at, onPick, onClose }: { at: { x: number; y: number }; onPick: (s: Sticker) => void; onClose: () => void }) {
   const [q, setQ] = useState("");
+  const [packs, setPacks] = useState<Pack[] | null>(packCache.packs ?? null);
+  const [tab, setTab] = useState(RECENT);
   const [items, setItems] = useState<Sticker[] | null>(null);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (packCache.packs) return;
+    call<Pack[]>("stickerPacks")
+      .then((p) => setPacks((packCache.packs = p)))
+      .catch((e) => (setPacks([]), setError(e.message)));
+  }, []);
+
   useEffect(() => {
     let live = true;
     setError("");
+    const cached = !q && tab !== RECENT ? packCache.stickers.get(tab) : undefined;
+    setItems(cached ?? null);
+    if (cached) return;
     const t = setTimeout(
       () =>
-        call<Sticker[]>("stickers", { q })
-          .then((s) => live && setItems(s))
+        (q ? call<Sticker[]>("stickers", { q }) : tab === RECENT ? call<Sticker[]>("stickers", { q: "" }) : call<Sticker[]>("stickerPack", { id: tab }))
+          .then((s) => {
+            if (!q && tab !== RECENT) packCache.stickers.set(tab, s);
+            if (live) setItems(s);
+          })
           .catch((e) => live && (setItems([]), setError(e.message))),
       q ? 300 : 0,
     );
     return () => ((live = false), clearTimeout(t));
-  }, [q]);
+  }, [q, tab]);
+
+  // With no recent stickers yet, open on the first pack instead of an empty tab.
+  useEffect(() => {
+    if (tab === RECENT && !q && items?.length === 0 && !error && packs?.length) setTab(packs[0]!.id);
+  }, [items, packs]);
+
+  const current = packs?.find((p) => p.id === tab);
+  const empty = error
+    ? `Không tải được sticker: ${error}`
+    : q
+      ? "Không tìm thấy sticker"
+      : tab === RECENT
+        ? "Chưa dùng sticker nào"
+        : "Bộ sticker này trống";
   return (
     <Popover at={at} onClose={onClose} label="Sticker">
       <div class="stickers">
         <label class="search">
           <Icon name="search" size={16} />
           <span class="sr">Tìm sticker</span>
-          <input placeholder="Tìm sticker" value={q} onInput={(e) => setQ(e.currentTarget.value)} autoFocus />
+          <input placeholder="Tìm sticker" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
         </label>
-        <div class="section-label">{q ? "Kết quả" : "Gần đây"}</div>
+        <div class="section-label">{q ? "Kết quả tìm kiếm" : tab === RECENT ? "Gần đây" : current?.name || "Sticker"}</div>
         <div class="sticker-grid">
           {items === null && Array.from({ length: 8 }, () => <i class="sticker-loading" aria-hidden="true" />)}
           {items?.map((s) => (
@@ -1009,9 +1044,20 @@ function StickerPicker({ at, onPick, onClose }: { at: { x: number; y: number }; 
               <img src={s.url} alt="" loading="lazy" />
             </button>
           ))}
+          {items?.length === 0 && <p class="sticker-empty">{empty}</p>}
         </div>
-        {items?.length === 0 && (
-          <p class="sticker-empty">{error ? `Không tải được sticker: ${error}` : q ? "Không tìm thấy sticker" : "Chưa dùng sticker nào. Gõ để tìm, ví dụ “chào”."}</p>
+        {!q && (
+          <div class="pack-tabs" role="tablist" aria-label="Bộ sticker">
+            <button role="tab" aria-selected={tab === RECENT} title="Gần đây" aria-label="Gần đây" onClick={() => setTab(RECENT)}>
+              <Icon name="clock" size={22} />
+            </button>
+            {packs === null && <i class="sticker-loading pack-loading" aria-hidden="true" />}
+            {packs?.map((p) => (
+              <button role="tab" aria-selected={tab === p.id} title={p.name} aria-label={p.name || `Bộ sticker ${p.id}`} onClick={() => setTab(p.id)}>
+                {p.icon ? <img src={p.icon} alt="" loading="lazy" /> : <span class="pack-initial">{initials(p.name || "S")}</span>}
+              </button>
+            ))}
+          </div>
         )}
       </div>
     </Popover>

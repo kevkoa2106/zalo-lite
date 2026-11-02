@@ -95,7 +95,13 @@ const paths: Record<string, JSX.Element> = {
       <path d="M12.5 3.5v4a3.5 3.5 0 0 0 3.5 3.5h4.5M8.5 14.5c.8 1 2 1.5 3.3 1.5" />
     </>
   ),
-  refresh:<path d="M19 12a7 7 0 1 1-2-4.9M19 4.5v3.5h-3.5" />,
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 2" />
+    </>
+  ),
+  refresh: <path d="M19 12a7 7 0 1 1-2-4.9M19 4.5v3.5h-3.5" />,
   logout: <path d="M14 4.5H7.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2H14M10.5 12h9.5M17 8.5l3.5 3.5-3.5 3.5" />,
   sun: (
     <>
