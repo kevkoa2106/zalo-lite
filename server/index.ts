@@ -187,15 +187,15 @@ async function syncContacts() {
   await step("conversations", () => preloadConversations());
   await step("group messages", async () => {
     let n = 0;
-    for (let i = 0; i < ids.length; i += 6)
+    for (let i = 0; i < ids.length && !cloudRefused; i += 6)
       await Promise.all(
         ids.slice(i, i + 6).map((id) =>
           groupCloud(id, "0", 30)
             .then((ms) => (n += ms.length))
-            .catch((e) => console.error(`group ${id} cloud history failed (code ${e?.code}):`, e?.message ?? e)),
+            .catch((e) => e?.code !== 604 && !cloudRefused && console.error(`group ${id} cloud history failed:`, e?.message ?? e)),
         ),
       );
-    return `${n} messages across ${ids.length} groups`;
+    return cloudRefused ? "refused by Zalo for this session" : `${n} messages across ${ids.length} groups`;
   });
   await step("group info", async () => {
     // ponytail: sequential 50-id chunks; parallelise if accounts with thousands of groups feel slow.
@@ -223,7 +223,7 @@ let groupIds = new Set<string>();
 // Group history from the group-cloud service, as Zalo PC loads it (observed in the bundle):
 // GET /api/cm/getrecentv2 (newest, globalMsgId "0") or /api/cm/getoldv2 (older than globalMsgId)
 // with {groupId, globalMsgId, count, msgIds, imei, src}; reply carries `groupMsgs`.
-let loggedCloudHost = false;
+let cloudRefused = false;
 async function groupCloud(groupId: string, globalMsgId: string, count: number, old = false) {
   const a = api as any;
   if (!a.groupCloud)
@@ -234,20 +234,23 @@ async function groupCloud(groupId: string, globalMsgId: string, count: number, o
         JSON.stringify({ groupId: props.groupId, globalMsgId: props.globalMsgId, count: props.count, msgIds: [], imei: ctx.imei, src: -1 }),
       );
       if (!params) throw new Error("encrypt failed");
-      // zca-js would stamp its own zpw_ver (685); the group-cloud service is newer, so send Zalo PC 26.10.20's 694.
+      // zca-js would stamp its own zpw_ver (685); send Zalo PC 26.10.20's 694 like the real client.
       const url = utils.makeURL(`${host}/api/cm/${props.old ? "getoldv2" : "getrecentv2"}`, { params, zpw_ver: 694 });
-      // zca-js only attaches cookies scoped to the request's own origin. Code 604 (Common.SESSION in
-      // Zalo PC's error table) means the session cookie did not arrive, so also send chat.zalo.me's.
-      const jar = (await ctx.cookie.getCookieString("https://chat.zalo.me")).split("; ");
-      const own = (await ctx.cookie.getCookieString(new URL(host).origin)).split("; ");
-      const Cookie = [...new Set([...own, ...jar].filter(Boolean))].join("; ");
-      return utils.resolve(await utils.request(url, { method: "GET", headers: { Cookie } }));
+      return utils.resolve(await utils.request(url, { method: "GET" }));
     });
-  if (!loggedCloudHost) {
-    loggedCloudHost = true;
-    console.log("group cloud host:", new URL(a.zpwServiceMap?.group_cloud_message?.[0] ?? "http://none").host);
+  if (cloudRefused) throw new Error("group cloud refuses this session (604)");
+  let data;
+  try {
+    data = await a.groupCloud({ groupId, globalMsgId, count, old });
+  } catch (e: any) {
+    // 604 is Common.SESSION in Zalo PC's error table. Observed live: the service rejects the web-style
+    // session zca-js logs in with, even with its cookies (same chat.zalo.me domain). Stop asking.
+    if (e?.code === 604) {
+      cloudRefused = true;
+      console.error("group cloud history: this login session is refused (604); group history is unavailable");
+    }
+    throw e;
   }
-  let data = await a.groupCloud({ groupId, globalMsgId, count, old });
   if (typeof data === "string") data = JSON.parse(data);
   const msgs: Record<string, any>[] = data?.groupMsgs ?? [];
   return msgs.map((m) => ingest(m, groupId, ThreadType.Group, false)).filter((m): m is Msg => !!m);
@@ -374,7 +377,7 @@ async function stickerPacks(): Promise<Pack[]> {
     }
   if (!cats.length && Array.isArray(res?.data)) cats = res.data;
   const excluded = new Set((res?.exCateIds ?? []).map(Number));
-  cats = cats.filter((c) => c?.id && !excluded.has(Number(c.id)));
+  cats = cats.filter((c) => c?.id && !excluded.has(Number(c.id)) && !c.is_hidden);
   if (cats[0]) console.log("sticker pack fields:", Object.keys(cats[0]).join(", "));
   const rank = (c: any) => (c.status === 4 ? 0 : Number(c.status) || 0);
   cats.sort((x, y) => (x.type == y.type ? rank(y) - rank(x) : Number(y.type) - Number(x.type)));
@@ -504,7 +507,7 @@ async function handle(r: Req): Promise<unknown> {
             if (oldest) await groupCloud(r.threadId, oldest.id, 50, true);
           }
         } catch (e) {
-          console.error("group cloud history failed:", e);
+          if (!cloudRefused) console.error("group cloud history failed:", e instanceof Error ? e.message : e);
         }
       }
       markSeen(r.threadId, t.type);
