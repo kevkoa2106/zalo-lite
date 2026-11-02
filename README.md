@@ -32,6 +32,6 @@ UI-only iteration in a browser: `bun run server` in one terminal and `bun run de
 
 - **1:1 history before first login.** Zalo keeps older 1:1 messages on the phone; the server only hands back recent messages on connect. Everything received after that is stored locally. Group history loads from the server.
 - **One web session at a time.** Like Zalo Web, logging in here signs out other web/PC sessions (the app shows a reconnect banner when that happens).
-- Not implemented yet: @mentions, sticker picker, forwarding, labels (Phân loại), voice/video calls.
+- Not implemented yet: @mentions, forwarding, labels (Phân loại), voice/video calls. Files over 100 MB (they travel through the local socket).
 
 Unofficial client. Use with your own account at your own risk.

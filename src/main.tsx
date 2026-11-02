@@ -1,7 +1,7 @@
 import { render } from "preact";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import "./styles.css";
-import { call, on, type Contact, type Me, type Msg, type State, type Thread } from "./api";
+import { call, on, type Contact, type Limits, type Me, type Msg, type State, type Sticker, type Thread } from "./api";
 import { ago, clock, day, hue, initials, size } from "./format";
 import { Icon, type IconName } from "./icons";
 
@@ -20,7 +20,6 @@ const PREVIEW_ICON: Partial<Record<Msg["kind"], IconName>> = {
 };
 const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase();
 const isMac = navigator.platform.startsWith("Mac");
-const MAX_UPLOAD = 100 * 1024 * 1024; // ponytail: files go base64 over the local socket; stream them if bigger uploads matter.
 
 function openExternal(url: string) {
   const t = (window as any).__TAURI__;
@@ -67,7 +66,7 @@ function Popover({ at, onClose, children, label }: { at: { x: number; y: number 
   useLayoutEffect(() => {
     const r = ref.current!.getBoundingClientRect();
     setPos({ x: Math.max(8, Math.min(at.x, innerWidth - r.width - 8)), y: Math.max(8, Math.min(at.y, innerHeight - r.height - 8)) });
-    ref.current!.querySelector<HTMLElement>("button")?.focus();
+    ref.current!.querySelector<HTMLElement>("input, button")?.focus();
   }, [at.x, at.y]);
   useEffect(() => {
     const down = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && onClose();
@@ -166,6 +165,7 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
   const [threads, setThreads] = useState<Record<string, Thread>>({});
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [limits, setLimits] = useState<Limits>({ maxFiles: 10, maxMB: 100 });
   const [active, setActive] = useState<string>("");
   const [msgs, setMsgs] = useState<Record<string, Msg[]>>({});
   const [typing, setTyping] = useState<Typing>({});
@@ -186,10 +186,11 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
   useEffect(() => {
     if (!up || kicked) return;
     setLoadError("");
-    call<{ threads: Thread[]; contacts: Contact[] }>("bootstrap")
+    call<{ threads: Thread[]; contacts: Contact[]; limits: Limits }>("bootstrap")
       .then((d) => {
         setThreads(Object.fromEntries(d.threads.map((t) => [t.id, t])));
         setContacts(d.contacts);
+        if (d.limits) setLimits(d.limits);
         setLoaded(true);
       })
       .catch((e) => setLoadError(e.message));
@@ -350,6 +351,7 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
             setMessages={(f) => setMsgs((s) => ({ ...s, [thread.id]: f(s[thread.id] ?? []) }))}
             typingName={typingName}
             friend={!!contacts.find((c) => c.id === thread.id)?.friend}
+            limits={limits}
             flash={flash}
           />
         ) : (
@@ -537,10 +539,11 @@ type ChatProps = {
   setMessages: (f: (m: Msg[]) => Msg[]) => void;
   typingName: string;
   friend: boolean;
+  limits: Limits;
   flash: (t: string) => void;
 };
 
-function Chat({ thread, meId, meName, messages, setMessages, typingName, friend, flash }: ChatProps) {
+function Chat({ thread, meId, meName, messages, setMessages, typingName, friend, limits, flash }: ChatProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [more, setMore] = useState(true);
@@ -593,21 +596,79 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
     if (el.scrollTop < 60) older();
   }
 
+  // "Sending" bubbles for media. Zalo returns the sent ids; each bubble then takes its real id, so the
+  // listener's echo of the same message replaces it instead of duplicating it. On failure it stays,
+  // marked failed, with retry and remove.
+  const retries = useRef(new Map<string, () => void>());
+  function pendingBubble(kind: Msg["kind"], attach: Record<string, any>, text = ""): Msg {
+    return {
+      id: `tmp-${crypto.randomUUID()}`, cliMsgId: "", threadId: thread.id, type: thread.type, from: meId, dName: meName,
+      ts: Date.now(), kind, text, attach, undone: false, reactions: {}, quote: null, pending: true,
+    };
+  }
+  function settle(tmpIds: string[], msgIds: string[]) {
+    setMessages((list) =>
+      tmpIds.reduce((next, tid, i) => {
+        const real = msgIds[i];
+        if (real && next.some((x) => x.id === real)) return next.filter((x) => x.id !== tid); // echo already arrived
+        return next.map((x) => (x.id === tid ? { ...x, id: real ?? x.id, pending: false } : x));
+      }, list),
+    );
+  }
+  function fail(tmpIds: string[], retry: () => void, err: string) {
+    tmpIds.forEach((id) => retries.current.set(id, retry));
+    setMessages((list) => list.map((x) => (tmpIds.includes(x.id) ? { ...x, pending: false, failed: true } : x)));
+    flash(err);
+  }
+
+  async function sendFiles(files: File[], text: string) {
+    const over = files.find((f) => f.size > limits.maxMB * 1024 * 1024);
+    if (over) return flash(`"${over.name}" vượt quá giới hạn ${limits.maxMB} MB của Zalo`);
+    if (files.length > limits.maxFiles) return flash(`Chỉ gửi được tối đa ${limits.maxFiles} file mỗi lần`);
+    const tmps = files.map((f) =>
+      f.type.startsWith("image/")
+        ? pendingBubble("photo", { thumb: URL.createObjectURL(f), local: true })
+        : pendingBubble("file", { title: f.name, params: { fileSize: f.size, fileExt: f.name.split(".").pop() }, local: true }),
+    );
+    setMessages((m) => [...m, ...tmps]);
+    const ids = tmps.map((t) => t.id);
+    try {
+      const payload = await Promise.all(files.map(async (f) => ({ name: f.name || "image.png", b64: await toB64(f) })));
+      const r = await call<{ msgIds: string[] }>("files", { threadId: thread.id, type: thread.type, files: payload, text });
+      settle(ids, r.msgIds);
+    } catch (e: any) {
+      fail(ids, () => (dismiss(ids), sendFiles(files, text)), `Gửi file thất bại: ${e.message}`);
+    }
+  }
+
+  async function sendSticker(s: Sticker) {
+    stick.current = true;
+    const tmp = pendingBubble("sticker", { id: s.id, url: s.url });
+    setMessages((m) => [...m, tmp]);
+    try {
+      const r = await call<{ msgIds: string[] }>("sticker", { threadId: thread.id, type: thread.type, sticker: s });
+      settle([tmp.id], r.msgIds);
+    } catch (e: any) {
+      fail([tmp.id], () => (dismiss([tmp.id]), sendSticker(s)), `Gửi sticker thất bại: ${e.message}`);
+    }
+  }
+
+  function dismiss(ids: string[]) {
+    setMessages((list) =>
+      list.filter((x) => {
+        if (!ids.includes(x.id)) return true;
+        if (x.attach?.local && x.attach.thumb) URL.revokeObjectURL(x.attach.thumb);
+        retries.current.delete(x.id);
+        return false;
+      }),
+    );
+  }
+
   async function send(text: string, files: File[]) {
     stick.current = true;
     const quote = replyTo;
     setReplyTo(null);
-    if (files.length) {
-      const big = files.find((f) => f.size > MAX_UPLOAD);
-      if (big) return flash(`"${big.name}" lớn hơn 100 MB`);
-      try {
-        const payload = await Promise.all(files.map(async (f) => ({ name: f.name || "image.png", b64: await toB64(f) })));
-        await call("files", { threadId: thread.id, type: thread.type, files: payload, text });
-      } catch (e: any) {
-        flash(`Gửi file thất bại: ${e.message}`);
-      }
-      return;
-    }
+    if (files.length) return sendFiles(files, text);
     const tmp: Msg = {
       id: `tmp-${Date.now()}`, cliMsgId: "", threadId: thread.id, type: thread.type, from: meId, dName: meName, ts: Date.now(),
       kind: "text", text, attach: null, undone: false, reactions: {}, pending: true,
@@ -618,8 +679,7 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
       const saved = await call<Msg>("send", { threadId: thread.id, type: thread.type, text, quoteId: quote?.id });
       setMessages((m) => (saved && !m.some((x) => x.id === saved.id) ? m.map((x) => (x.id === tmp.id ? saved : x)) : m.filter((x) => x.id !== tmp.id)));
     } catch (e: any) {
-      setMessages((m) => m.map((x) => (x.id === tmp.id ? { ...x, pending: false, failed: true } : x)));
-      flash(`Không gửi được tin nhắn: ${e.message}`);
+      fail([tmp.id], () => (dismiss([tmp.id]), send(text, [])), `Không gửi được tin nhắn: ${e.message}`);
     }
   }
 
@@ -692,6 +752,8 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
                     onReply={() => setReplyTo(m)}
                     onView={setViewer}
                     flash={flash}
+                    onRetry={retries.current.get(m.id)}
+                    onDismiss={() => dismiss([m.id])}
                   />
                 ))}
               </div>
@@ -706,7 +768,7 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
           </>
         )}
       </div>
-      <Composer thread={thread} replyTo={replyTo} replyName={replyTo ? nameOf(replyTo.from, replyTo.dName) : ""} cancelReply={() => setReplyTo(null)} onSend={send} />
+      <Composer thread={thread} replyTo={replyTo} replyName={replyTo ? nameOf(replyTo.from, replyTo.dName) : ""} cancelReply={() => setReplyTo(null)} onSend={send} onSticker={sendSticker} />
       {viewer && (
         <div class="viewer" role="dialog" aria-label="Xem ảnh" tabIndex={-1} onClick={() => setViewer("")} onKeyDown={(e) => e.key === "Escape" && setViewer("")} ref={(el) => el?.focus()}>
           <img src={viewer} alt="" />
@@ -740,8 +802,9 @@ function Linkified({ text }: { text: string }) {
   );
 }
 
-function Bubble({ m, mine, last, meId, onReply, onView, flash }: {
+function Bubble({ m, mine, last, meId, onReply, onView, flash, onRetry, onDismiss }: {
   m: Msg; mine: boolean; last: boolean; meId: string; onReply: () => void; onView: (src: string) => void; flash: (t: string) => void;
+  onRetry?: () => void; onDismiss?: () => void;
 }) {
   const [pop, setPop] = useState<null | { kind: "react" | "more"; x: number; y: number }>(null);
   const a = m.attach ?? {};
@@ -773,12 +836,18 @@ function Bubble({ m, mine, last, meId, onReply, onView, flash }: {
         bare = true;
         body = (
           <span class="sticker">
-            <img
-              src={`https://zalo-api.zadn.vn/api/emoticon/sticker/webpc?eid=${a.id}&size=130`}
-              alt="Sticker"
-              loading="lazy"
-              onError={(e) => e.currentTarget.replaceWith(Object.assign(document.createElement("span"), { className: "bubble", textContent: "Sticker" }))}
-            />
+            {a.url && !a.missing ? (
+              <img
+                src={String(a.url)}
+                alt="Sticker"
+                loading="lazy"
+                onError={(e) => e.currentTarget.replaceWith(Object.assign(document.createElement("span"), { className: "sticker-missing", textContent: "Sticker" }))}
+              />
+            ) : a.missing ? (
+              <span class="sticker-missing">Sticker</span>
+            ) : (
+              <span class="sticker-loading" role="status" aria-label="Đang tải sticker" />
+            )}
           </span>
         );
         break;
@@ -862,6 +931,12 @@ function Bubble({ m, mine, last, meId, onReply, onView, flash }: {
           </span>
         )}
       </div>
+      {m.failed && (
+        <div class="failed-actions">
+          {onRetry && <button onClick={onRetry}><Icon name="refresh" size={15} /> Thử lại</button>}
+          {onDismiss && <button onClick={onDismiss}><Icon name="close" size={15} /> Xoá</button>}
+        </div>
+      )}
       {canAct && !m.undone && (
         <div class={`tools${pop ? " open" : ""}`}>
           <button class="icon-btn" aria-label="Thả cảm xúc" onClick={openPop("react")}><Icon name="smile" size={16} /></button>
@@ -901,11 +976,66 @@ function Bubble({ m, mine, last, meId, onReply, onView, flash }: {
 
 // ---------- composer ----------
 
-function Composer({ thread, replyTo, replyName, cancelReply, onSend }: {
+// Recently used stickers first; typing searches Zalo's sticker catalogue (debounced).
+function StickerPicker({ at, onPick, onClose }: { at: { x: number; y: number }; onPick: (s: Sticker) => void; onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const [items, setItems] = useState<Sticker[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let live = true;
+    setError("");
+    const t = setTimeout(
+      () =>
+        call<Sticker[]>("stickers", { q })
+          .then((s) => live && setItems(s))
+          .catch((e) => live && (setItems([]), setError(e.message))),
+      q ? 300 : 0,
+    );
+    return () => ((live = false), clearTimeout(t));
+  }, [q]);
+  return (
+    <Popover at={at} onClose={onClose} label="Sticker">
+      <div class="stickers">
+        <label class="search">
+          <Icon name="search" size={16} />
+          <span class="sr">Tìm sticker</span>
+          <input placeholder="Tìm sticker" value={q} onInput={(e) => setQ(e.currentTarget.value)} autoFocus />
+        </label>
+        <div class="section-label">{q ? "Kết quả" : "Gần đây"}</div>
+        <div class="sticker-grid">
+          {items === null && Array.from({ length: 8 }, () => <i class="sticker-loading" aria-hidden="true" />)}
+          {items?.map((s) => (
+            <button aria-label="Gửi sticker" onClick={() => (onPick(s), onClose())}>
+              <img src={s.url} alt="" loading="lazy" />
+            </button>
+          ))}
+        </div>
+        {items?.length === 0 && (
+          <p class="sticker-empty">{error ? `Không tải được sticker: ${error}` : q ? "Không tìm thấy sticker" : "Chưa dùng sticker nào. Gõ để tìm, ví dụ “chào”."}</p>
+        )}
+      </div>
+    </Popover>
+  );
+}
+
+// Object URL for a staged image, released when the preview goes away.
+function Thumb({ file }: { file: File }) {
+  const [src, setSrc] = useState("");
+  useEffect(() => {
+    const u = URL.createObjectURL(file);
+    setSrc(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+  return src ? <img class="thumb" src={src} alt="" /> : null;
+}
+
+function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker }: {
   thread: Thread; replyTo: Msg | null; replyName: string; cancelReply: () => void; onSend: (text: string, files: File[]) => void;
+  onSticker: (s: Sticker) => void;
 }) {
   const [text, setText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [picker, setPicker] = useState<{ x: number; y: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const ta = useRef<HTMLTextAreaElement>(null);
   const imgInput = useRef<HTMLInputElement>(null);
@@ -955,7 +1085,20 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend }: {
   return (
     <div class="composer">
       {dragging && <div class="drop">Thả file vào đây để gửi</div>}
+      {picker && <StickerPicker at={picker} onPick={onSticker} onClose={() => setPicker(null)} />}
       <div class="bar">
+        <button
+          class="icon-btn"
+          aria-label="Gửi sticker"
+          title="Gửi sticker"
+          aria-haspopup="dialog"
+          onClick={(e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setPicker({ x: r.left, y: r.top - 372 });
+          }}
+        >
+          <Icon name="sticker" size={22} />
+        </button>
         <button class="icon-btn" aria-label="Gửi hình ảnh" title="Gửi hình ảnh" onClick={() => imgInput.current!.click()}><Icon name="image" size={22} /></button>
         <button class="icon-btn" aria-label="Đính kèm file" title="Đính kèm file" onClick={() => fileInput.current!.click()}><Icon name="attach" size={22} /></button>
         <input ref={imgInput} type="file" accept="image/*" multiple hidden onChange={(e) => (setFiles((f) => [...f, ...e.currentTarget.files!]), (e.currentTarget.value = ""))} />
@@ -973,9 +1116,10 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend }: {
       {files.length > 0 && (
         <div class="staged">
           {files.map((f, i) => (
-            <span class="chip">
-              <Icon name={f.type.startsWith("image/") ? "image" : "file"} size={16} />
+            <span class={`chip${f.type.startsWith("image/") ? " has-thumb" : ""}`}>
+              {f.type.startsWith("image/") ? <Thumb file={f} /> : <Icon name="file" size={16} />}
               <span>{f.name || "Ảnh dán"}</span>
+              {!f.type.startsWith("image/") && <span class="fsize">{size(f.size)}</span>}
               <button class="icon-btn" aria-label={`Bỏ ${f.name}`} onClick={() => setFiles((fs) => fs.filter((_, j) => j !== i))}><Icon name="close" size={14} /></button>
             </span>
           ))}

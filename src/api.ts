@@ -38,6 +38,8 @@ export type Thread = {
 };
 export type Contact = { id: string; type: 0 | 1; name: string; avatar: string; friend?: boolean };
 export type Me = { id: string; name: string; avatar: string };
+export type Sticker = { id: number; cateId: number; type: number; url: string };
+export type Limits = { maxFiles: number; maxMB: number };
 export type State =
   | { state: "boot" | "logged_out" | "qr_expired" | "kicked" }
   | { state: "qr"; qr: string }
