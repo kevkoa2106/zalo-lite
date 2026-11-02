@@ -301,11 +301,62 @@ const blankThread = (id: string, type: 0 | 1): Thread => ({
 });
 
 const pendingPeople = new Set<string>();
+// Received stickers carry only {id, catId, type}. Their image URL comes from getStickersDetail,
+// batched every 300 ms and cached in kv, then the waiting messages are updated and re-broadcast.
+const stickerWaiting = new Map<number, Set<string>>(); // sticker id -> message ids
+let stickerTimer: ReturnType<typeof setTimeout> | null = null;
+
+function stickerImage(m: Msg) {
+  const id = Number(m.attach?.id);
+  if (!id || !store) return;
+  const url = store.get(`sticker:${id}`);
+  if (url) return void (m.attach!.url = url);
+  if (!stickerWaiting.has(id)) stickerWaiting.set(id, new Set());
+  stickerWaiting.get(id)!.add(m.id);
+  stickerTimer ??= setTimeout(resolveStickers, 300);
+}
+
+async function resolveStickers() {
+  stickerTimer = null;
+  if (!api || !store) return;
+  const ids = [...stickerWaiting.keys()].slice(0, 50);
+  try {
+    for (const d of await api.getStickersDetail(ids)) store.set(`sticker:${d.id}`, d.stickerWebpUrl || d.stickerUrl);
+  } catch (e) {
+    console.error("sticker lookup failed:", e);
+  }
+  for (const id of ids) {
+    const url = store.get(`sticker:${id}`);
+    for (const msgId of stickerWaiting.get(id) ?? []) {
+      const m = store.msg(msgId);
+      if (!m?.attach) continue;
+      // No URL means the UI shows its "Sticker" label instead of a broken image.
+      if (url) m.attach.url = url;
+      else m.attach.missing = true;
+      store.putMsg(m);
+      broadcast({ ev: "msg", msg: m });
+    }
+    stickerWaiting.delete(id);
+  }
+  if (stickerWaiting.size) stickerTimer = setTimeout(resolveStickers, 300);
+}
+
+type Sticker = { id: number; cateId: number; type: number; url: string };
+
+// Zalo's own attachment limits, read by zca-js from the login settings.
+const fileLimits = () => {
+  const s = (api as any)?.getContext?.()?.settings?.features?.sharefile ?? {};
+  // ponytail: files travel base64 over the local socket, so cap at 100 MB even if Zalo allows more;
+  // pass a file path from the Tauri shell instead if bigger uploads are needed.
+  return { maxFiles: Number(s.max_file) || 10, maxMB: Math.min(Number(s.max_size_share_file_v3) || 100, 100) };
+};
+
 function ingest(raw: Record<string, any>, threadId: string, type: ThreadType, live: boolean) {
   if (!store) return;
   const m = normalize(raw, threadId, type as 0 | 1, me.id);
   const prev = store.msg(m.id);
   if (prev) m.reactions = prev.reactions;
+  if (m.kind === "sticker") stickerImage(m);
   store.putMsg(m);
   if (m.from !== me.id && m.dName && !store.person(m.from)) store.putPerson(m.from, m.dName, "");
   const t = touchThread(m, live && !prev && m.from !== me.id && threadId !== activeThread);
@@ -368,7 +419,25 @@ async function handle(r: Req): Promise<unknown> {
   };
   switch (r.op) {
     case "bootstrap":
-      return { threads: threadList(), contacts: contacts() };
+      return { threads: threadList(), contacts: contacts(), limits: fileLimits() };
+    case "stickers": {
+      const q = String(r.q ?? "").trim();
+      if (!q) return JSON.parse(store.get("stickers:recent") ?? "[]") as Sticker[];
+      const ids = (await api.getStickers(q)).slice(0, 48);
+      if (!ids.length) return [];
+      return (await api.getStickersDetail(ids)).map((d): Sticker => {
+        const url = d.stickerWebpUrl || d.stickerUrl;
+        store!.set(`sticker:${d.id}`, url);
+        return { id: d.id, cateId: d.cateId, type: d.type, url };
+      });
+    }
+    case "sticker": {
+      const s = r.sticker as Sticker;
+      const res = await api.sendSticker({ id: s.id, cateId: s.cateId, type: s.type }, r.threadId, r.type);
+      const recent = (JSON.parse(store.get("stickers:recent") ?? "[]") as Sticker[]).filter((x) => x.id !== s.id);
+      store.set("stickers:recent", JSON.stringify([s, ...recent].slice(0, 30)));
+      return { msgIds: [String(res.msgId)] };
+    }
     case "open": {
       activeThread = r.threadId;
       const t = store.thread(r.threadId) ?? blankThread(r.threadId, r.type);
@@ -397,21 +466,27 @@ async function handle(r: Req): Promise<unknown> {
       return echo(r, res.message?.msgId, r.text, r.quoteId);
     }
     case "files": {
+      const { maxFiles, maxMB } = fileLimits();
+      const files = r.files as { name: string; b64: string }[];
+      if (files.length > maxFiles) throw new Error(`Chỉ gửi được tối đa ${maxFiles} file mỗi lần`);
+      for (const f of files)
+        if ((f.b64.length * 3) / 4 > maxMB * 1024 * 1024) throw new Error(`"${f.name}" vượt quá giới hạn ${maxMB} MB`);
       const dir = join(tmpdir(), "zalo-lite-upload", crypto.randomUUID());
       mkdirSync(dir, { recursive: true });
       const paths: string[] = [];
-      for (const f of r.files as { name: string; b64: string }[]) {
+      for (const f of files) {
         const name = basename(f.name.replace(/\\/g, "/"));
         const p = join(dir, name && name !== "." && name !== ".." ? name : `file-${paths.length}`);
         await Bun.write(p, Buffer.from(f.b64, "base64"));
         paths.push(p);
       }
       try {
-        await api.sendMessage({ msg: r.text ?? "", attachments: paths }, r.threadId, r.type);
+        const res = await api.sendMessage({ msg: r.text ?? "", attachments: paths }, r.threadId, r.type);
+        // Real ids let the UI turn its "sending" bubbles into the messages the listener echoes back.
+        return { msgIds: res.attachment.map((a) => String(a.msgId)) };
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-      return;
     }
     case "react": {
       const m = msg(r.msgId);
