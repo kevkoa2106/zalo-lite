@@ -60,7 +60,8 @@ export function normalize(raw: Raw, threadId: string, type: 0 | 1, ownId: string
     type,
     from,
     dName: String(raw.dName ?? ""),
-    ts: Number(raw.ts),
+    ts: Number(raw.ts) || 0, // a NaN here would break the conversation sort
+
     kind,
     text,
     attach,
