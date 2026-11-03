@@ -49,6 +49,7 @@ async function resume() {
   if (!existsSync(SESSION)) return setState({ state: "logged_out" });
   try {
     const s = await Bun.file(SESSION).json();
+    console.log(`login: resuming a ${s.pc ? "PC QR" : "web QR"} session`);
     await ready(await zalo(!!s.pc).login(s));
   } catch (e) {
     console.error("resume failed", e);
@@ -228,7 +229,8 @@ async function syncContacts() {
             .catch((e) => e?.code !== 604 && !cloudRefused && console.error(`group ${id} cloud history failed:`, e?.message ?? e)),
         ),
       );
-    return cloudRefused ? "refused by Zalo for this session" : `${n} messages across ${ids.length} groups`;
+    if (cloudRefused) return "refused by Zalo for this session";
+    return `${n} messages across ${ids.length} groups` + (cloudFiltered ? `; Zalo withheld the history of ${cloudFiltered} groups for this device (isFiltered)` : "");
   });
   await step("group info", async () => {
     // ponytail: sequential 50-id chunks; parallelise if accounts with thousands of groups feel slow.
@@ -257,6 +259,7 @@ let groupIds = new Set<string>();
 // GET /api/cm/getrecentv2 (newest, globalMsgId "0") or /api/cm/getoldv2 (older than globalMsgId)
 // with {groupId, globalMsgId, count, msgIds, imei, src}; reply carries `groupMsgs`.
 let cloudRefused = false;
+let cloudFiltered = 0; // groups for which Zalo reported messages but withheld them
 async function groupCloud(groupId: string, globalMsgId: string, count: number, old = false) {
   const a = api as any;
   if (!a.groupCloud)
@@ -268,7 +271,9 @@ async function groupCloud(groupId: string, globalMsgId: string, count: number, o
       );
       if (!params) throw new Error("encrypt failed");
       // zca-js would stamp its own zpw_ver (685); send Zalo PC 26.10.20's 694 like the real client.
-      const url = utils.makeURL(`${host}/api/cm/${props.old ? "getoldv2" : "getrecentv2"}`, { params, zpw_ver: 694 });
+      // Verified live: without `nretry` this service answers 604 (Common.SESSION) even for a valid session;
+      // with it the same session gets a normal reply. Zalo PC sends it on every request.
+      const url = utils.makeURL(`${host}/api/cm/${props.old ? "getoldv2" : "getrecentv2"}`, { params, zpw_ver: 694, nretry: 0 });
       return utils.resolve(await utils.request(url, { method: "GET" }));
     });
   if (cloudRefused) throw new Error("group cloud refuses this session (604)");
@@ -276,8 +281,7 @@ async function groupCloud(groupId: string, globalMsgId: string, count: number, o
   try {
     data = await a.groupCloud({ groupId, globalMsgId, count, old });
   } catch (e: any) {
-    // 604 is Common.SESSION in Zalo PC's error table. Observed live: the service rejects the web-style
-    // session zca-js logs in with, even with its cookies (same chat.zalo.me domain). Stop asking.
+    // Still 604 despite nretry: the session itself is refused. Stop asking.
     if (e?.code === 604) {
       cloudRefused = true;
       console.error("group cloud history: this login session is refused (604); group history is unavailable");
@@ -286,6 +290,10 @@ async function groupCloud(groupId: string, globalMsgId: string, count: number, o
   }
   if (typeof data === "string") data = JSON.parse(data);
   const msgs: Record<string, any>[] = data?.groupMsgs ?? [];
+  // Observed live: the service reports message ranges (minMsgId/maxMsgId) but returns an empty list with
+  // isFiltered=1. Zalo PC's own defaults have cloud history off (cloud.enable=false) and the server sends
+  // no `cloud` settings to this client, so this is Zalo withholding history, not an error.
+  if (!msgs.length && data?.isFiltered === 1) cloudFiltered++;
   return msgs.map((m) => ingest(m, groupId, ThreadType.Group, false)).filter((m): m is Msg => !!m);
 }
 

@@ -105,3 +105,11 @@ Zalo PC does not use the `id.zalo.me/account/authen/qr/*` flow that zca-js uses.
 6. The backend then opens that session with zca-js's cookie login (`imei`, cookies, user agent), using client version 694.
 
 Not verified live: steps 4 and 5 beyond the polling behaviour (they need a phone scan), and whether the resulting session is accepted by the group-cloud service (error 604 for web-style sessions).
+
+## Group history: what was found live (2026-11-03, PC QR session)
+
+- The PC QR login works end to end: scan, confirm, `zpw_sek`, then zca-js cookie login at client version 694 (friends, groups, realtime all work). The session type was **not** why group history failed.
+- **Error 604 on `/api/cm/getrecentv2` and `getoldv2` is cured by adding `nretry=0` to the query** (Zalo PC sends it on every request). Nothing else changed the answer: not `g`-prefixed ids, POST, other params, or the host.
+- With `nretry`, the service replies normally (`error: 0`) but returns **no messages**: `groupMsgs: []`, `isFiltered: 1`, while `minMsgId`/`maxMsgId` show a message range exists. Groups with no messages report `lastMsgId: "0"`, `isFiltered: 0`. Paging (`getoldv2` from the reported ids, other `count`/`src`, other start ids) changes nothing.
+- Zalo PC's built-in defaults have `cloud.enable: false`; the server config (`getServerInfo`) sends this client no `cloud` block, with either `computer_name: "Web"` or the machine name. So cloud history looks disabled for this client by design, and Zalo PC itself loads a new device's history through the **phone-to-PC transfer** (`/api/message/pull_mobile_msg`, `/api/transfer-sync-v2/request-sync`, `get_crossdb`), which is not implemented here.
+- `/api/preloadconvers/get-last-msgs` is also unchanged by `nretry` (only activity since this device logged in).
