@@ -113,3 +113,16 @@ Not verified live: steps 4 and 5 beyond the polling behaviour (they need a phone
 - With `nretry`, the service replies normally (`error: 0`) but returns **no messages**: `groupMsgs: []`, `isFiltered: 1`, while `minMsgId`/`maxMsgId` show a message range exists. Groups with no messages report `lastMsgId: "0"`, `isFiltered: 0`. Paging (`getoldv2` from the reported ids, other `count`/`src`, other start ids) changes nothing.
 - Zalo PC's built-in defaults have `cloud.enable: false`; the server config (`getServerInfo`) sends this client no `cloud` block, with either `computer_name: "Web"` or the machine name. So cloud history looks disabled for this client by design, and Zalo PC itself loads a new device's history through the **phone-to-PC transfer** (`/api/message/pull_mobile_msg`, `/api/transfer-sync-v2/request-sync`, `get_crossdb`), which is not implemented here.
 - `/api/preloadconvers/get-last-msgs` is also unchanged by `nretry` (only activity since this device logged in).
+
+## Phone-to-PC message transfer (static analysis of Zalo PC 26.10.20, not yet exercised)
+
+How Zalo PC loads a new device's history (`lazy/main-startup.*.js` sync service, `shared-worker.*.js`, `native/nativelibs/db-cross-v4`):
+
+1. **Key pair (plain JS)**: a session generates `RSA-2048`, public key as base64 SPKI DER, private key as PKCS#1 PEM, with a TTL (`cross_setting.timeoutKey` hours).
+2. **Ask the phone**: `GET {file}/api/message/pull_mobile_msg` with encrypted `{pc_name: hostname, public_key, from_seq_id, is_retry, min_seq_id, temp_key, imei}` (cmd 12000). Related: `get_crossdb` (`{pc_name, sync_session}`, 12412), `get_backupmsginfo` (12096), `delete_snapshot_mobile_msg` (12003), `transfer-sync-v2/request-sync` (`{reqId, data}`, 12888), `cancel_pull_mobile_msg` (12700).
+3. **Websocket side**: commands in the `SYNC_MESSAGE` family (`REQUEST`, `REQUEST_MOBILE_WAKE_UP`, `ACK_DELETE_SYNC_SESSION`) and a newer `BACKUP_MSG` family (`CREATE_SESSION`, `INIT`, `GET_METADATA`, ...). Numeric command ids were not resolved. The phone must be online and is woken up; an event (`syncmsg_info`, with `transfer_error` on failure) announces the result.
+4. **The backup**: the event carries `{name, url, checksum, encryptedKey, format (0|1), numberOfMessagesCount, numberOfConversationsCount}`. Zalo PC downloads `url` (with cookies), unwraps `encryptedKey` with the RSA private key (`RSA_PKCS1_PADDING`, hex or base64 per `format`), then calls the native add-on.
+5. **Native add-on** (`db-cross-v4-native.node`, a standard N-API module): `decompressAndDecryptDb(in, out, key)` for format 0 (one database file) and `decompressAndDecryptDb_V2(in, outDir, KEY_UPPERCASE, progressCb)` for format 1 (a folder of per-conversation databases). Its symbols show **mbedTLS AES** tables (`FSb`, `FT0`..`FT3`, `KT0`..`KT3`) and the **7-Zip LZMA SDK**, plus an MD5 check and a custom file header ("read header fail", "Incorrect key length"). Nothing proprietary beyond the container layout.
+6. **Restore**: Zalo PC's JS (`RESTORE_CONVERSATIONS`, `RESTORE_MESSAGES` in `shared-worker`) reads those databases and imports them. Schema not yet read.
+
+Open items before any implementation: the websocket command ids, what the phone prompts the user with, the container header/AES mode, and the restore schema.
