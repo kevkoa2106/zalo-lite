@@ -134,3 +134,11 @@ Open items before any implementation: the websocket command ids, what the phone 
 - Within about a minute the realtime socket delivered one unknown event, **cmd 621 / subCmd 0** (`error_code 0`, "Success", `data` is a string), which the realtime listener does not decode. This is the first candidate for the sync status event.
 - `cancel_pull_mobile_msg` is accepted afterwards.
 - Not yet known: what the phone showed, and the decoded contents of the reply string and of event 621.
+
+#### Handshake, decoded (same day, three runs)
+
+- The phone **does show a sync prompt** after `pull_mobile_msg`.
+- The reply to `pull_mobile_msg` and to `cancel_pull_mobile_msg` is an **empty string**: a bare acknowledgement.
+- **Event 621/0 is not the sync event.** Its decoded payload is `{"mycloudMedia": {...}}` (a few numeric limits and a short token): My Cloud media settings, which arrive a few seconds after the connection/request regardless.
+- With the prompt left unanswered, no backup information arrived within about 60 s. The sync notice (`syncmsg_info`, `transfer_error`) is therefore expected only after the phone accepts, and probably as an `act` inside the control-event commands (601/602), which the first probes deliberately skipped.
+- Next observation to make: accept the prompt once and log the `act` names of 601/602 events (names and counts only).
