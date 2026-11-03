@@ -126,3 +126,11 @@ How Zalo PC loads a new device's history (`lazy/main-startup.*.js` sync service,
 6. **Restore**: Zalo PC's JS (`RESTORE_CONVERSATIONS`, `RESTORE_MESSAGES` in `shared-worker`) reads those databases and imports them. Schema not yet read.
 
 Open items before any implementation: the websocket command ids, what the phone prompts the user with, the container header/AES mode, and the restore schema.
+
+### Transfer handshake, live result (2026-11-03, PC QR session, nothing downloaded or imported)
+
+- `get_backupmsginfo` returns HTTP 404 on `tt-files-wpa.chat.zalo.me` (retired or not for this client).
+- `pull_mobile_msg` (fresh in-memory RSA key, `from_seq_id: 0`, `nretry=0`, version 694) is **accepted**: HTTP 200, `error_code 0`, reply data is a plain string.
+- Within about a minute the realtime socket delivered one unknown event, **cmd 621 / subCmd 0** (`error_code 0`, "Success", `data` is a string), which the realtime listener does not decode. This is the first candidate for the sync status event.
+- `cancel_pull_mobile_msg` is accepted afterwards.
+- Not yet known: what the phone showed, and the decoded contents of the reply string and of event 621.
