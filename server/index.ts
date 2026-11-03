@@ -7,6 +7,7 @@ import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { openStore, type Msg, type Store, type Thread } from "./store";
 import { normalize, previewOf } from "./normalize";
+import { loginPcQr, PcQrError } from "./pclogin";
 
 const PORT = Number(process.env.ZL_PORT ?? 17789);
 const TOKEN = process.env.ZL_TOKEN ?? "";
@@ -40,15 +41,47 @@ const setState = (s: State) => broadcast({ ev: "state", ...(state = s) });
 
 // ---------- session ----------
 
-const zalo = () => new Zalo({ selfListen: true, logging: false, checkUpdate: false });
+// A session created by Zalo PC's own QR login (pclogin.ts) talks to Zalo as the PC client does,
+// so zca-js is told to use the PC client version (694) for it. Web sessions keep zca-js's default.
+const zalo = (pc = false) => new Zalo({ selfListen: true, logging: false, checkUpdate: false, ...(pc ? { apiType: 30, apiVersion: 694 } : {}) });
 
 async function resume() {
   if (!existsSync(SESSION)) return setState({ state: "logged_out" });
   try {
-    await ready(await zalo().login(await Bun.file(SESSION).json()));
+    const s = await Bun.file(SESSION).json();
+    await ready(await zalo(!!s.pc).login(s));
   } catch (e) {
     console.error("resume failed", e);
     setState({ state: "logged_out" });
+  }
+}
+
+// Zalo PC's QR login. Set ZL_LOGIN=web to use the older web-style QR login instead.
+async function loginPc() {
+  qrActions?.abort();
+  const ctl = new AbortController();
+  let shown = false;
+  qrActions = { retry: () => (ctl.abort(), void loginPc()), abort: () => ctl.abort() };
+  try {
+    const s = await loginPcQr((e) => {
+      if (e.type === "qr") (shown = true), setState({ state: "qr", qr: e.image });
+      else if (e.type === "scanned") setState({ state: "scanned", name: e.name, avatar: e.avatar });
+      else setState({ state: "qr_expired" });
+    }, ctl.signal);
+    qrActions = null;
+    await Bun.write(SESSION, JSON.stringify({ cookie: s.cookie, imei: s.imei, userAgent: s.userAgent, pc: true }));
+    await ready(await zalo(true).login({ cookie: s.cookie, imei: s.imei, userAgent: s.userAgent }));
+  } catch (e) {
+    if (ctl.signal.aborted) return; // replaced by a newer attempt
+    qrActions = null;
+    if (!shown) {
+      // Zalo refused the PC flow before showing a QR: fall back to the web-style login.
+      console.error("PC QR login unavailable, using web QR login:", e instanceof Error ? e.message : e);
+      return loginQR();
+    }
+    console.error("PC QR login failed:", e);
+    rmSync(SESSION, { force: true });
+    setState({ state: e instanceof PcQrError && e.message === "QR expired" ? "qr_expired" : "error", error: String(e instanceof Error ? e.message : e) });
   }
 }
 
@@ -448,8 +481,8 @@ type Req = { op: string; rid?: number; [k: string]: any };
 
 async function handle(r: Req): Promise<unknown> {
   switch (r.op) {
-    case "login_qr": return void loginQR();
-    case "qr_retry": return void (qrActions ? qrActions.retry() : loginQR());
+    case "login_qr": return void (process.env.ZL_LOGIN === "web" ? loginQR() : loginPc());
+    case "qr_retry": return void (qrActions ? qrActions.retry() : process.env.ZL_LOGIN === "web" ? loginQR() : loginPc());
     case "logout": return logout();
     case "reconnect":
       api?.listener.stop();

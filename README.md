@@ -35,3 +35,7 @@ UI-only iteration in a browser: `bun run server` in one terminal and `bun run de
 - Not implemented yet: @mentions, forwarding, labels (Phân loại), voice/video calls. Files over 100 MB (they travel through the local socket).
 
 Unofficial client. Use with your own account at your own risk.
+
+## Login
+
+The app signs in with Zalo PC's own QR login (the one Zalo's desktop app uses), falling back to the web-style QR login if Zalo refuses it. Set `ZL_LOGIN=web` to force the web-style login.

@@ -92,3 +92,16 @@ Observed (`_getHeader`, `_processEventBlob`, `_onRawData`, `_decrypt`, `_decompr
 - **Pack contents**: `GET {sticker}/api/message/sticker/category/sticker_detail` with `{"cid": "<id>"}` (cmd 11284), wrapped by zca-js as `getStickerCategoryDetail`.
 - **Search / detail / send**: zca-js `getStickers(keyword)`, `getStickersDetail(ids)`, `sendSticker({id, cateId, type})`.
 - Live check (2026-11-02): the group-cloud host is `tt-group-cm.chat.zalo.me`, inside the same `chat.zalo.me` cookie domain, and still returns 604 with `zpw_ver=694`. So the refusal is about the session type (zca-js logs in through the web QR flow), not missing cookies or client version. Getting group history would need Zalo PC's own login (`/api/login/reqqr` + signed `getLoginInfo`), not attempted.
+
+## PC QR login (`server/pclogin.ts`)
+
+Zalo PC does not use the `id.zalo.me/account/authen/qr/*` flow that zca-js uses. Observed in the 26.10.20 bundle (`getQRCode`, `Dr`, the login screen's state machine) and confirmed live on 2026-11-03:
+
+1. **QR**: `GET https://wpa.chat.zalo.me/api/login/reqqr` (cmd 11133). Encrypted data `{language, client_time, imei, computer_name, logged_uids, self_g, qr_form}` plus `zcid`, `zcid_ext`, `enc_ver=v2`, `type=30`, `client_version=694`, `signkey`. With `self_g=0` the server returns the plain QR image; the "trusted device" variants are re-rendered by native code (`genFirstQR`/`genSecondQR`) and are avoided by sending 0.
+2. **Signing**: `signkey = MD5("zsecure" + "reqqr" + values of all other query params, keys sorted)`, and the signed set **includes `zpw_ver` and `zpw_type`**. Signing without them (as `getLoginInfo` does) returns inner error **18022 Invalid Signature**. Tried and rejected live: other signing names, `type` 31, `client_version` 685/693, signing the plain fields, adding `nretry`.
+3. **Reply**: the encrypted payload (key = the request's `encryptKey`) is an envelope `{error_code, error_message, data: {base64_qr, chk_wait_scan, chk_wait_cfirm, qr_timeout: 180, qr_retry: 3, token_id}}`.
+4. **Wait for scan**: GET `chk_wait_scan` (`qr.id.zalo.me/polling/qr/waiting`, `&lang=vi`) is a long-poll, no params or encryption; a timeout means "not yet". Reply `{error_code: 0, data: {avatar, display_name, link_data}}`; `-20` carries a fresh `base64_qr`; `-21` and `18010` stop the flow.
+5. **Wait for confirm**: GET `chk_wait_cfirm` (`qr.id.zalo.me/polling/qr/pc-status`). Reply data has `uid`, `dkey`, `zpw_sek`, `zpw_kt`, `profile`, `devices`. Zalo PC installs `zpw_sek` as its session cookie for `chat.zalo.me`.
+6. The backend then opens that session with zca-js's cookie login (`imei`, cookies, user agent), using client version 694.
+
+Not verified live: steps 4 and 5 beyond the polling behaviour (they need a phone scan), and whether the resulting session is accepted by the group-cloud service (error 604 for web-style sessions).
