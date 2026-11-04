@@ -142,3 +142,9 @@ Open items before any implementation: the websocket command ids, what the phone 
 - **Event 621/0 is not the sync event.** Its decoded payload is `{"mycloudMedia": {...}}` (a few numeric limits and a short token): My Cloud media settings, which arrive a few seconds after the connection/request regardless.
 - With the prompt left unanswered, no backup information arrived within about 60 s. The sync notice (`syncmsg_info`, `transfer_error`) is therefore expected only after the phone accepts, and probably as an `act` inside the control-event commands (601/602), which the first probes deliberately skipped.
 - Next observation to make: accept the prompt once and log the `act` names of 601/602 events (names and counts only).
+
+#### Handshake, runs 5 and 6 (control events and a quiet run)
+
+- The sync notices are **control events** (command 601, `act_type` `syncmsgmb`), as suspected. In run 5, with the prompt accepted, three arrived within about 6 s of the request: `syncmsgmb/user_confirm`, `syncmsgmb/syncmsg_info` (a ~1.5 KB string) and `syncmsgmb/transfer_error` (fields: `public_key`, `pc_name`, `can_retry`, `error_msg`, `error_code`). Their contents were not yet decoded (printed as "string" only), and `transfer_error` arriving together with the info suggests the transfer failed or was refused.
+- Run 6 (decoding in place) saw **none** of them: the request was acknowledged (empty string), only a routine command 524 event (the same shape as the conversation preload, empty) arrived twice, and `delete_snapshot_mobile_msg` answered 212 "not found", so no backup was created. Possible causes: Zalo throttling repeated requests, the phone not prompting this time, or the account being in a cool-down after the earlier accepted transfers. Not determined.
+- Earlier runs created server-side snapshots for RSA keys that were thrown away; they cannot be decrypted and should expire on Zalo's side.
