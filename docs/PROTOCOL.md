@@ -114,7 +114,7 @@ Not verified live: steps 4 and 5 beyond the polling behaviour (they need a phone
 - Zalo PC's built-in defaults have `cloud.enable: false`; the server config (`getServerInfo`) sends this client no `cloud` block, with either `computer_name: "Web"` or the machine name. So cloud history looks disabled for this client by design, and Zalo PC itself loads a new device's history through the **phone-to-PC transfer** (`/api/message/pull_mobile_msg`, `/api/transfer-sync-v2/request-sync`, `get_crossdb`), which is not implemented here.
 - `/api/preloadconvers/get-last-msgs` is also unchanged by `nretry` (only activity since this device logged in).
 
-## Phone-to-PC message transfer (static analysis of Zalo PC 26.10.20, not yet exercised)
+## Phone-to-PC message transfer (static analysis of Zalo PC 26.10.20; exercised live, see the working end-to-end notes below)
 
 How Zalo PC loads a new device's history (`lazy/main-startup.*.js` sync service, `shared-worker.*.js`, `native/nativelibs/db-cross-v4`):
 

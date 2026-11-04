@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 428" width="880" height="428" role="img" aria-labelledby="arch-title arch-desc" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="arch-title">Zalo Lite architecture</title>
+  <desc id="arch-desc">A Tauri window talks over a local WebSocket to a Bun backend, which talks to Zalo's servers, caches messages in SQLite, and optionally reads phone backups with the decrypt library from Zalo PC.</desc>
+  <defs>
+    <marker id="arch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 1 L9 5 L0 9 Z" fill="#6b7280"/></marker>
+    <marker id="arch-arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 1 L9 5 L0 9 Z" fill="#bf4520"/></marker>
+  </defs>
+  <rect width="880" height="428" fill="#f5f5f5"/>
+  <text x="40" y="44" font-size="11" letter-spacing="1.4" fill="#bf4520" font-family="ui-monospace, Menlo, monospace">ARCHITECTURE</text>
+  <text x="40" y="76" font-size="24" fill="#2d3142" font-family="Georgia, 'Times New Roman', serif">One window, one local backend, Zalo's own protocol</text>
+
+  <!-- connectors first, boxes after -->
+  <path d="M240 148 H336" fill="none" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arch-arrow)"/>
+  <path d="M540 160 H636" fill="none" stroke="#bf4520" stroke-width="1.5" marker-end="url(#arch-arrow-accent)"/>
+  <path d="M440 196 V292" fill="none" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arch-arrow)"/>
+  <path d="M340 180 H298 Q290 180 290 188 V324 Q290 332 282 332 H240" fill="none" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arch-arrow)"/>
+  <path d="M740 196 V292" fill="none" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arch-arrow)"/>
+
+  <!-- connector labels on opaque masks, 6px clear of their strokes -->
+  <rect x="254" y="122" width="68" height="16" fill="#f5f5f5"/>
+  <text x="288" y="134" font-size="10" text-anchor="middle" fill="#6b7280" font-family="ui-monospace, Menlo, monospace" letter-spacing="0.6">WEBSOCKET</text>
+  <rect x="540" y="130" width="96" height="16" fill="#f5f5f5"/>
+  <text x="588" y="142" font-size="10" text-anchor="middle" fill="#bf4520" font-family="ui-monospace, Menlo, monospace" letter-spacing="0.6">HTTPS + WSS</text>
+  <rect x="452" y="236" width="80" height="16" fill="#f5f5f5"/>
+  <text x="456" y="248" font-size="10" fill="#6b7280" font-family="ui-monospace, Menlo, monospace" letter-spacing="0.6">READ / WRITE</text>
+  <rect x="750" y="236" width="104" height="16" fill="#f5f5f5"/>
+  <text x="754" y="248" font-size="10" fill="#6b7280" font-family="ui-monospace, Menlo, monospace" letter-spacing="0.6">BACKUP, OPT-IN</text>
+  <rect x="226" y="248" width="56" height="16" fill="#f5f5f5"/>
+  <text x="278" y="260" font-size="10" text-anchor="end" fill="#6b7280" font-family="ui-monospace, Menlo, monospace" letter-spacing="0.6">DECRYPT</text>
+
+  <!-- row 1 -->
+  <rect x="40" y="112" width="200" height="72" rx="6" fill="#ffffff" stroke="#2d3142"/>
+  <text x="56" y="142" font-size="14" font-weight="600" fill="#2d3142">Window</text>
+  <text x="56" y="162" font-size="10" fill="#6b7280" font-family="ui-monospace, Menlo, monospace">Tauri shell, Preact UI</text>
+  <rect x="340" y="124" width="200" height="72" rx="6" fill="#fbe9e2" stroke="#bf4520"/>
+  <text x="356" y="154" font-size="14" font-weight="600" fill="#2d3142">Backend</text>
+  <text x="356" y="174" font-size="10" fill="#6b7280" font-family="ui-monospace, Menlo, monospace">Bun sidecar, zca-js</text>
+  <rect x="640" y="124" width="200" height="72" rx="6" fill="#ffffff" stroke="#2d3142"/>
+  <text x="656" y="154" font-size="14" font-weight="600" fill="#2d3142">Zalo servers</text>
+  <text x="656" y="174" font-size="10" fill="#6b7280" font-family="ui-monospace, Menlo, monospace">chat, group, file, znoise</text>
+
+  <!-- row 2 -->
+  <rect x="340" y="296" width="200" height="72" rx="6" fill="#ffffff" stroke="#2d3142"/>
+  <text x="356" y="326" font-size="14" font-weight="600" fill="#2d3142">Message cache</text>
+  <text x="356" y="346" font-size="10" fill="#6b7280" font-family="ui-monospace, Menlo, monospace">SQLite, newest 3000 per chat</text>
+  <rect x="40" y="296" width="200" height="72" rx="6" fill="#ffffff" stroke="#6b7280" stroke-dasharray="4,3"/>
+  <text x="56" y="326" font-size="14" font-weight="600" fill="#2d3142">Zalo PC library</text>
+  <text x="56" y="346" font-size="10" fill="#6b7280" font-family="ui-monospace, Menlo, monospace">db-cross-v4, installed app</text>
+  <rect x="640" y="296" width="200" height="72" rx="6" fill="#ffffff" stroke="#6b7280" stroke-dasharray="4,3"/>
+  <text x="656" y="326" font-size="14" font-weight="600" fill="#2d3142">Your phone</text>
+  <text x="656" y="346" font-size="10" fill="#6b7280" font-family="ui-monospace, Menlo, monospace">holds the full history</text>
+
+  <!-- legend -->
+  <rect x="40" y="396" width="16" height="12" rx="2" fill="#fbe9e2" stroke="#bf4520"/>
+  <text x="64" y="406" font-size="11" fill="#6b7280">built here, the focal piece</text>
+  <rect x="244" y="396" width="16" height="12" rx="2" fill="#ffffff" stroke="#6b7280" stroke-dasharray="3,2"/>
+  <text x="268" y="406" font-size="11" fill="#6b7280">optional or external, used only for phone sync</text>
+</svg>

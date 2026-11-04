@@ -1,10 +1,30 @@
-node_modules
-dist
-src-tauri/target
-src-tauri/binaries
+# dependencies and build output
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/
+
+# private data: never commit sessions, keys, message caches or backups
+session.json
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.pem
+.env
+.env.*
+cache/
+
+# logs, OS and editor files
 *.log
 .DS_Store
-.swarm
-.claude-flow
-ruvector.db
+.vscode/
+.idea/
+
+# AI tool state and indexes (local to each machine)
+.claude/
+.claude-flow/
+.swarm/
 .grepai/
+ruvector.db
