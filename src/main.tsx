@@ -899,20 +899,22 @@ function Bubble({ m, mine, last, meId, onReply, onView, flash, onRetry, onDismis
         );
         break;
       case "call": {
+        // The card is its own surface, like Zalo's: centred title and detail, a full-width "Gọi lại" row, and the time outside it.
         const c = a.call as { title: string; detail: string; tone: "ok" | "missed" | "rejected"; video: boolean; callback: boolean } | undefined;
+        bare = true;
         body = (
           <>
             <span class={`callcard ${c?.tone ?? "ok"}`}>
               <b class="ctitle">{c?.title ?? m.text ?? "Cuộc gọi"}</b>
               <span class="cdetail">
-                <Icon name={c?.tone === "missed" ? "phoneMissed" : c?.tone === "rejected" ? "phoneRejected" : "phoneIn"} size={22} />
+                <Icon name={c?.tone === "missed" ? "phoneMissed" : c?.tone === "rejected" ? "phoneRejected" : "phoneIn"} size={20} />
                 {c?.detail}
               </span>
               {c?.callback !== false && (
                 <button class="callback" onClick={() => flash("Zalo Lite chưa hỗ trợ gọi, hãy gọi bằng Zalo trên điện thoại")}>Gọi lại</button>
               )}
             </span>
-            {meta}
+            <span class="calltime">{clock(m.ts)}</span>
           </>
         );
         break;
