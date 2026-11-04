@@ -210,6 +210,9 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
           case "contacts":
             setContacts(ev.contacts);
             break;
+          case "notice":
+            flash(ev.text);
+            break;
           case "msg": {
             const m = ev.msg as Msg;
             if (ev.thread) setThreads((s) => ({ ...s, [ev.thread.id]: ev.thread }));
@@ -313,6 +316,9 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
               </button>
             ))}
             <hr />
+            <button role="menuitem" onClick={() => (setSettings(null), call("phone_sync").catch((e) => flash(e.message)))}>
+              <Icon name="phoneIn" size={18} /> Đồng bộ tin nhắn từ điện thoại
+            </button>
             <button role="menuitem" class="danger" onClick={() => call("logout")}>
               <Icon name="logout" size={18} /> Đăng xuất
             </button>

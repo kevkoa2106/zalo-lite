@@ -5,6 +5,7 @@ import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
+import { phoneSync } from "./transfer";
 import { openStore, type Msg, type Store, type Thread } from "./store";
 import { normalize, previewOf } from "./normalize";
 import { loginPcQr, PcQrError } from "./pclogin";
@@ -260,6 +261,20 @@ async function syncContacts() {
 }
 
 let groupIds = new Set<string>();
+
+// Names and photos for conversations that arrived from a backup before their contact or group info was known.
+async function nameImported() {
+  const bare = store!.threads().filter((t) => t.name === t.id && t.id !== me.id);
+  const users = bare.filter((t) => t.type === 0).map((t) => t.id);
+  for (let i = 0; i < users.length; i += 50) await fetchPeople(users.slice(i, i + 50)).catch(() => {});
+  for (const t of bare.filter((t) => t.type === 0)) applyPerson(store!.thread(t.id)!);
+  const groups = bare.filter((t) => t.type === 1).map((t) => t.id);
+  for (let i = 0; i < groups.length; i += 50) {
+    const info = await api!.getGroupInfo(groups.slice(i, i + 50)).catch(() => null);
+    for (const [id, g] of Object.entries(info?.gridInfoMap ?? {}) as [string, any][])
+      store!.putThread({ ...(store!.thread(id) ?? blankThread(id, 1)), name: g.name, avatar: g.fullAvt || g.avt, members: g.totalMember ?? 0 });
+  }
+}
 
 // The conversation list: latest message of every conversation, groups included.
 // Same call Zalo PC makes at startup (getLastMessagesForPreview → /api/preloadconvers/get-last-msgs).
@@ -537,6 +552,18 @@ async function handle(r: Req): Promise<unknown> {
         store!.set(`sticker:${d.id}`, url);
         return { id: d.id, cateId: d.cateId, type: d.type, url };
       });
+    }
+    case "phone_sync": {
+      // Runs in the background; progress arrives as "notice" events. The request is accepted on the phone.
+      phoneSync({
+        api, ownId: me.id, cacheDir: join(DATA, "cache", "transfer"), keep: CACHE_PER_CHAT,
+        notify: (text) => broadcast({ ev: "notice", text }),
+        ingest: (raw, threadId, type) => ingest(raw, threadId, type, false),
+        batch: (fn) => store!.batch(fn),
+        afterImport: nameImported,
+        resume: !!r.resume,
+      }).then(() => broadcast({ ev: "threads", threads: threadList() })).catch((e) => console.error("phone sync failed:", e?.message ?? e));
+      return {};
     }
     case "stickerPacks":
       return stickerPacks();

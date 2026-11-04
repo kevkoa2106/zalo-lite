@@ -97,6 +97,8 @@ export function openStore(file: string) {
       db.run("PRAGMA wal_checkpoint(TRUNCATE)");
       return changes;
     },
+    /** Run many writes as one transaction (a 60k-message import in seconds instead of minutes). */
+    batch: (fn: () => void) => db.transaction(fn)(),
     close: () => db.close(),
   };
 }
