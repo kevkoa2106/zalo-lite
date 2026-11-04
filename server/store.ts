@@ -39,6 +39,7 @@ export function openStore(file: string) {
   db.run("PRAGMA wal_autocheckpoint = 200");
   db.run(`CREATE TABLE IF NOT EXISTS msgs (id TEXT PRIMARY KEY, thread TEXT, ts INTEGER, json TEXT)`);
   db.run(`CREATE INDEX IF NOT EXISTS msgs_thread_ts ON msgs(thread, ts)`);
+  db.run(`CREATE INDEX IF NOT EXISTS msgs_kind_ts ON msgs(json_extract(json, '$.kind'), ts)`);
   db.run(`CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, json TEXT)`);
   db.run(`CREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, name TEXT, avatar TEXT, friend INTEGER DEFAULT 0)`);
   db.run(`CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)`);
@@ -84,9 +85,8 @@ export function openStore(file: string) {
     get: (k: string) => (q.get.get(k) as { v: string } | null)?.v ?? null,
     set: (k: string, v: string) => q.set.run(k, v),
     /** Newest messages of one kind (sent and received), for "recent stickers". */
-    // ponytail: LIKE scan over the cache, which prune() keeps small; add a kind column if it ever shows up in profiles.
     recentOf: (kind: Kind, limit: number) =>
-      (db.query("SELECT json FROM msgs WHERE json LIKE ? ORDER BY ts DESC LIMIT ?").all(`%"kind":"${kind}"%`, limit) as { json: string }[])
+      (db.query("SELECT json FROM msgs WHERE json_extract(json, '$.kind') = ? ORDER BY ts DESC LIMIT ?").all(kind, limit) as { json: string }[])
         .map((r) => JSON.parse(r.json) as Msg),
     /** Keep the newest `keep` messages per conversation and give the disk space back. Returns rows removed. */
     prune: (keep: number) => {
