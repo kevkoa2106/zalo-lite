@@ -80,8 +80,7 @@ export function normalize(raw: Raw, threadId: string, type: 0 | 1, ownId: string
   if (typeof c === "string") text = c;
   else if (c && typeof c === "object") {
     const params = parseJson(c.params);
-    attach = { ...c, params };
-    if (isCall) attach.call = callInfo(String(c.action), params, c.duration);
+    attach = { ...c, params, ...(isCall && { call: callInfo(String(c.action), params, c.duration) }) };
     // Captions on photos/links travel in `title` (links) or `description` (photos); calls carry their text in `title`.
     text = kind === "link" ? String(c.href ?? c.title ?? "") : String(c.title ?? c.description ?? c.msg ?? "");
     if (kind === "photo") text = String(c.description ?? c.title ?? "");
