@@ -35,6 +35,8 @@ export type Thread = {
 export function openStore(file: string) {
   const db = new Database(file, { create: true });
   db.run("PRAGMA journal_mode = WAL");
+  db.run("PRAGMA journal_size_limit = 4194304"); // the WAL file shrinks back instead of keeping its high-water mark
+  db.run("PRAGMA wal_autocheckpoint = 200");
   db.run(`CREATE TABLE IF NOT EXISTS msgs (id TEXT PRIMARY KEY, thread TEXT, ts INTEGER, json TEXT)`);
   db.run(`CREATE INDEX IF NOT EXISTS msgs_thread_ts ON msgs(thread, ts)`);
   db.run(`CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, json TEXT)`);
@@ -81,6 +83,20 @@ export function openStore(file: string) {
     people: () => q.people.all() as { id: string; name: string; avatar: string; friend: number }[],
     get: (k: string) => (q.get.get(k) as { v: string } | null)?.v ?? null,
     set: (k: string, v: string) => q.set.run(k, v),
+    /** Newest messages of one kind (sent and received), for "recent stickers". */
+    // ponytail: LIKE scan over the cache, which prune() keeps small; add a kind column if it ever shows up in profiles.
+    recentOf: (kind: Kind, limit: number) =>
+      (db.query("SELECT json FROM msgs WHERE json LIKE ? ORDER BY ts DESC LIMIT ?").all(`%"kind":"${kind}"%`, limit) as { json: string }[])
+        .map((r) => JSON.parse(r.json) as Msg),
+    /** Keep the newest `keep` messages per conversation and give the disk space back. Returns rows removed. */
+    prune: (keep: number) => {
+      const { changes } = db.run(
+        `DELETE FROM msgs WHERE rowid IN (SELECT rowid FROM (SELECT rowid, ROW_NUMBER() OVER (PARTITION BY thread ORDER BY ts DESC) AS n FROM msgs) WHERE n > ?)`,
+        [keep],
+      );
+      db.run("PRAGMA wal_checkpoint(TRUNCATE)");
+      return changes;
+    },
     close: () => db.close(),
   };
 }

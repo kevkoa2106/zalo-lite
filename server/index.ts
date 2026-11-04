@@ -15,6 +15,7 @@ const DATA = process.env.ZL_DATA ?? join(homedir(), "Library", "Application Supp
 const SESSION = join(DATA, "session.json");
 const ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "http://localhost:1420", "http://127.0.0.1:1420"]);
 mkdirSync(DATA, { recursive: true });
+const CACHE_PER_CHAT = Number(process.env.ZL_CACHE_PER_CHAT) || 3000;
 
 type State =
   | { state: "boot" | "logged_out" }
@@ -131,6 +132,13 @@ async function ready(a: API) {
     me = { id: me.id, name: profile.displayName || profile.zaloName, avatar: profile.avatar };
   } catch {}
   store = openStore(join(DATA, `${me.id}.db`));
+  // The history is a cache of Zalo's servers, not an archive: keep the newest messages per chat and let the disk file shrink.
+  const trim = () => {
+    const n = store?.prune(CACHE_PER_CHAT);
+    if (n) console.log(`cache: dropped ${n} old messages (kept ${CACHE_PER_CHAT} per chat)`);
+  };
+  trim();
+  setInterval(trim, 3600_000).unref();
   store.putPerson(me.id, me.name, me.avatar);
   // Zalo's My Documents is its own account and arrives like any other chat; drop the
   // self-chat placeholder that earlier versions created under your own id.
@@ -386,6 +394,18 @@ async function resolveStickers() {
 }
 
 type Sticker = { id: number; cateId: number; type: number; url: string };
+
+// "Recent" = stickers picked in this app, then any you sent from other devices (read back from synced history).
+function recentStickers(): Sticker[] {
+  const out = new Map<number, Sticker>();
+  for (const s of JSON.parse(store!.get("stickers:recent") ?? "[]") as Sticker[]) out.set(s.id, s);
+  for (const m of store!.recentOf("sticker", 200)) {
+    const id = Number(m.attach?.id);
+    const url = m.attach?.url ? String(m.attach.url) : store!.get(`sticker:${id}`);
+    if (m.from === me?.id && id && url && !out.has(id)) out.set(id, { id, cateId: Number(m.attach?.catId), type: Number(m.attach?.type), url });
+  }
+  return [...out.values()].slice(0, 30);
+}
 type Pack = { id: number; name: string; icon: string };
 
 // Your sticker packs, loaded the way Zalo PC does it (getStickerCatsV2 → _handleGetCatesData):
@@ -509,7 +529,7 @@ async function handle(r: Req): Promise<unknown> {
       return { threads: threadList(), contacts: contacts(), limits: fileLimits() };
     case "stickers": {
       const q = String(r.q ?? "").trim();
-      if (!q) return JSON.parse(store.get("stickers:recent") ?? "[]") as Sticker[];
+      if (!q) return recentStickers();
       const ids = (await api.getStickers(q)).slice(0, 48);
       if (!ids.length) return [];
       return (await api.getStickersDetail(ids)).map((d): Sticker => {
@@ -522,7 +542,8 @@ async function handle(r: Req): Promise<unknown> {
       return stickerPacks();
     case "stickerPack": {
       const pack = await api.getStickerCategoryDetail(Number(r.id));
-      return pack.map((d): Sticker => {
+      // Only stickers that belong to the requested shop; a few responses carry neighbours.
+      return pack.filter((d) => d.cateId === Number(r.id)).map((d): Sticker => {
         const url = d.stickerWebpUrl || d.stickerUrl;
         store!.set(`sticker:${d.id}`, url);
         return { id: d.id, cateId: d.cateId, type: d.type, url };
