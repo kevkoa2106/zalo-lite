@@ -31,6 +31,15 @@ Settings menu, then **Đồng bộ tin nhắn từ điện thoại**. Your phone
 
 Decrypting needs the native library that ships with an installed **Zalo PC** (`/Applications/Zalo.app`). Without it, everything else still works. The full protocol write-up is in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
+## Download
+
+Installers for macOS (Apple silicon and Intel), Linux and Windows are attached to each [release](../../releases). They are **unsigned**: macOS asks you to open the app from System Settings, Privacy & Security, and Windows SmartScreen shows a warning ("More info", then "Run anyway").
+
+| Platform | Chat, groups, stickers, call records | Phone history sync |
+|---|---|---|
+| macOS | yes (tested) | yes, needs Zalo PC installed |
+| Linux, Windows | yes, built and released but not yet tested by the maintainer | not yet: it reads Zalo PC's macOS library |
+
 ## Getting started
 
 Requirements: macOS, [Bun](https://bun.sh), [Rust](https://rustup.rs) with the [Tauri prerequisites](https://tauri.app/start/prerequisites/). Zalo PC is optional (phone sync only).
@@ -74,7 +83,7 @@ All optional, set as environment variables.
 - **Group history.** Zalo withholds some group history from new devices; phone sync fills most of it.
 - **Calls.** Call records are shown, but placing or answering calls is not supported.
 - **Not implemented yet:** @mentions, forwarding, labels (Phân loại), video and voice calls, files over 100 MB.
-- **macOS first.** The shell is Tauri, so other platforms are possible, but only macOS is tested.
+- **macOS first.** Linux and Windows builds are released from CI, but only macOS has been run by hand.
 
 ## Contributing and security
 

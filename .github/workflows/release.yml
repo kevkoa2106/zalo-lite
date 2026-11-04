@@ -1,0 +1,81 @@
+name: release
+
+# Builds Zalo Lite for macOS (Apple silicon and Intel), Linux and Windows and attaches the
+# installers to a draft GitHub release. Push a tag like v0.1.0, or run it by hand.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple silicon)
+            os: macos-latest
+            rust_target: aarch64-apple-darwin
+            bun_target: bun-darwin-arm64
+            ext: ""
+          - name: macOS (Intel)
+            os: macos-latest
+            rust_target: x86_64-apple-darwin
+            bun_target: bun-darwin-x64
+            ext: ""
+          - name: Linux
+            os: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            bun_target: bun-linux-x64
+            ext: ""
+          - name: Windows
+            os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            bun_target: bun-windows-x64
+            ext: ".exe"
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Linux system libraries
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The backend is a Bun program compiled to one executable, shipped next to the app as a Tauri sidecar.
+      - name: Compile the backend sidecar
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries
+          bun build --compile --minify --target=${{ matrix.bun_target }} server/index.ts \
+            --outfile "src-tauri/binaries/zalo-lite-server-${{ matrix.rust_target }}${{ matrix.ext }}"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: bunx tauri
+          args: --target ${{ matrix.rust_target }}
+          tagName: ${{ github.ref_name }}
+          releaseName: Zalo Lite ${{ github.ref_name }}
+          releaseBody: Unsigned builds. See the README for platform notes.
+          releaseDraft: true
+          prerelease: false

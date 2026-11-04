@@ -23,12 +23,16 @@ pub fn run() {
             let token = uuid::Uuid::new_v4().simple().to_string();
             let data = app.path().app_data_dir()?;
             let exe = std::env::current_exe()?;
-            let server = exe.with_file_name("zalo-lite-server");
+            let server = exe.with_file_name(if cfg!(windows) { "zalo-lite-server.exe" } else { "zalo-lite-server" });
 
-            let child = Command::new(&server)
-                .env("ZL_PORT", port.to_string())
-                .env("ZL_TOKEN", &token)
-                .env("ZL_DATA", &data)
+            let mut cmd = Command::new(&server);
+            cmd.env("ZL_PORT", port.to_string()).env("ZL_TOKEN", &token).env("ZL_DATA", &data);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console flashes up for the backend
+            }
+            let child = cmd
                 .spawn()
                 .map_err(|e| format!("cannot start backend at {}: {e}", server.display()))?;
             app.manage(Backend(Mutex::new(Some(child))));
