@@ -1,4 +1,6 @@
-# Zalo Lite
+<p align="center"><img src="docs/img/logo.svg" width="128" height="128" alt="Zalo Lite app icon: a white speech bubble floating on a blue tile"></p>
+
+<h1 align="center">Zalo Lite</h1>
 
 A lightweight desktop client for the messaging part of [Zalo](https://zalo.me), built with **Tauri** (shell) and **Bun** (backend and tooling). Chat, groups, My Documents, photos, files, stickers and call records are in. Social features (Nhật ký, Cloud, mini-apps) are deliberately left out.
 

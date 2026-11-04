@@ -28,3 +28,5 @@ cache/
 .swarm/
 .grepai/
 ruvector.db
+
+brag-output/
