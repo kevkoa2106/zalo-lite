@@ -38,15 +38,50 @@ const parseJson = (s: unknown) => {
   }
 };
 
+const CALL_ACTIONS = new Set(["recommened.misscall", "recommened.calling", "recommened.receivecall", "recommened.calltime"]);
+
+export type CallInfo = { title: string; detail: string; tone: "ok" | "missed" | "rejected"; video: boolean; callback: boolean };
+
+const span = (sec: number) => {
+  const s = Math.max(0, Math.round(sec) || 0);
+  const h = Math.floor(s / 3600);
+  return `${h ? `${h} giờ ` : ""}${Math.floor((s % 3600) / 60)} phút ${s % 60} giây`;
+};
+
+/** Title, detail line and icon tone of a call bubble, following Zalo PC's own rules (params.reason: 3 = callee rejected). */
+export function callInfo(action: string, rawParams: unknown, duration?: unknown): CallInfo {
+  const p = (typeof rawParams === "string" ? parseJson(rawParams) : rawParams ?? {}) as Record<string, any>;
+  const missed = action === "recommened.misscall";
+  const caller = p.isCaller != null ? !!p.isCaller : action === "recommened.calling";
+  const video = p.calltype === 1;
+  const reason = Number(p.reason) || 0;
+  const kind = video ? "video" : "thoại";
+  let title: string;
+  let tone: CallInfo["tone"] = "ok";
+  if (!missed) title = `Cuộc gọi ${kind} ${caller ? "đi" : "đến"}`;
+  else if (caller) {
+    tone = "missed";
+    title = reason === 4 || reason === 5 ? "Bạn đã hủy" : reason === 3 ? "Người nhận từ chối" : reason === 1 ? "Người nhận bận" : `Cuộc gọi ${kind} đi`;
+  } else {
+    tone = reason === 3 ? "rejected" : "missed";
+    title = reason === 3 ? "Bạn đã từ chối" : "Bạn bị nhỡ";
+  }
+  // A call that connected shows its length; an unanswered outgoing one shows 0; other misses name the call type.
+  const detail = !missed ? span(Number(p.duration ?? duration)) : caller && reason <= 2 ? span(0) : `Cuộc gọi ${kind}`;
+  return { title, detail, tone, video, callback: p.isEnableCallback !== false };
+}
+
 export function normalize(raw: Raw, threadId: string, type: 0 | 1, ownId: string): Msg {
-  const kind = KINDS[raw.msgType] ?? (String(raw.msgType).includes("call") ? "call" : "other");
   const c = raw.content;
+  const isCall = c && typeof c === "object" && CALL_ACTIONS.has(String(c.action));
+  const kind = isCall ? "call" : (KINDS[raw.msgType] ?? (String(raw.msgType).includes("call") ? "call" : "other"));
   let text = "";
   let attach: Msg["attach"] = null;
   if (typeof c === "string") text = c;
   else if (c && typeof c === "object") {
     const params = parseJson(c.params);
     attach = { ...c, params };
+    if (isCall) attach.call = callInfo(String(c.action), params, c.duration);
     // Captions on photos/links travel in `title` (links) or `description` (photos); calls carry their text in `title`.
     text = kind === "link" ? String(c.href ?? c.title ?? "") : String(c.title ?? c.description ?? c.msg ?? "");
     if (kind === "photo") text = String(c.description ?? c.title ?? "");
@@ -76,6 +111,6 @@ export function normalize(raw: Raw, threadId: string, type: 0 | 1, ownId: string
 export function previewOf(m: Msg) {
   if (m.undone) return "Tin nhắn đã được thu hồi";
   if (m.kind === "text" || m.kind === "link") return m.text;
-  if (m.kind === "call") return m.text || LABELS.call;
+  if (m.kind === "call") return `[${(m.attach?.call as CallInfo | undefined)?.title ?? m.text ?? LABELS.call}]`;
   return LABELS[m.kind];
 }

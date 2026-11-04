@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { normalize, previewOf } from "./normalize";
+import { callInfo, normalize, previewOf } from "./normalize";
 
 test("text from self", () => {
   const m = normalize({ msgId: "1", cliMsgId: "2", uidFrom: "0", msgType: "webchat", content: "chào", ts: "1700000000000" }, "t", 0, "me");
@@ -25,4 +25,16 @@ test("photo with params and quote", () => {
 test("recalled and unknown types", () => {
   expect(normalize({ msgId: "4", uidFrom: "u", msgType: "chat.undo", content: {}, ts: "1" }, "t", 0, "me").undone).toBe(true);
   expect(normalize({ msgId: "5", uidFrom: "u", msgType: "chat.location.new", content: {}, ts: "1" }, "t", 0, "me").kind).toBe("other");
+});
+
+test("call bubbles follow Zalo PC titles", () => {
+  const raw = (action: string, params: object) => ({ msgId: "9", uidFrom: "u", msgType: "chat.recommended", content: { action, params: JSON.stringify(params) }, ts: "1" });
+  const m = normalize(raw("recommened.calltime", { duration: 17, calltype: 0, isCaller: false }), "t", 0, "me");
+  expect(m.kind).toBe("call");
+  expect(m.attach?.call).toMatchObject({ title: "Cuộc gọi thoại đến", detail: "0 phút 17 giây", tone: "ok" });
+  expect(previewOf(m)).toBe("[Cuộc gọi thoại đến]");
+  expect(callInfo("recommened.misscall", { isCaller: false, calltype: 0 })).toMatchObject({ title: "Bạn bị nhỡ", detail: "Cuộc gọi thoại", tone: "missed" });
+  expect(callInfo("recommened.misscall", { isCaller: false, calltype: 1, reason: 3 })).toMatchObject({ title: "Bạn đã từ chối", detail: "Cuộc gọi video", tone: "rejected" });
+  expect(callInfo("recommened.misscall", { isCaller: true, reason: 2 })).toMatchObject({ title: "Cuộc gọi thoại đi", detail: "0 phút 0 giây" });
+  expect(callInfo("recommened.calltime", { duration: 3725, isCaller: true }).detail).toBe("1 giờ 2 phút 5 giây");
 });

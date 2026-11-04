@@ -892,14 +892,25 @@ function Bubble({ m, mine, last, meId, onReply, onView, flash, onRetry, onDismis
           </>
         );
         break;
-      case "call":
+      case "call": {
+        const c = a.call as { title: string; detail: string; tone: "ok" | "missed" | "rejected"; video: boolean; callback: boolean } | undefined;
         body = (
           <>
-            <span class="call"><span class="ic"><Icon name="phoneIn" size={18} /></span>{m.text || "Cuộc gọi thoại"}</span>
+            <span class={`callcard ${c?.tone ?? "ok"}`}>
+              <b class="ctitle">{c?.title ?? m.text ?? "Cuộc gọi"}</b>
+              <span class="cdetail">
+                <Icon name={c?.tone === "missed" ? "phoneMissed" : c?.tone === "rejected" ? "phoneRejected" : "phoneIn"} size={22} />
+                {c?.detail}
+              </span>
+              {c?.callback !== false && (
+                <button class="callback" onClick={() => flash("Zalo Lite chưa hỗ trợ gọi, hãy gọi bằng Zalo trên điện thoại")}>Gọi lại</button>
+              )}
+            </span>
             {meta}
           </>
         );
         break;
+      }
       case "other":
         body = <><i>Tin nhắn này chưa được hỗ trợ hiển thị.</i>{meta}</>;
         break;
