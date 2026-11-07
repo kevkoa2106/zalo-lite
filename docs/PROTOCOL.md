@@ -201,3 +201,17 @@ The "Layer A" above (AES-128-CBC with an MD5-derived key, LZMA1) is the **format
 - Implemented as `unpackArchive` in `server/crossdb-native-free.ts` with `xz-decompress` (WebAssembly, MIT); tests include a byte-for-byte check against a local fixture when one exists.
 - **Gotcha for fixtures:** because the library decrypts in place, a capture must copy the download *before* calling it (`ZL_KEEP_FIXTURE=1` now writes `backup.enc` first, then `backup.dec` and `oracle/`).
 - **Still open:** confirm the AES step on a real encrypted download (one more phone accept), the `parse_bin_net` message-blob format, and wiring all of it into `server/transfer.ts`. The oracle databases already in the fixture contain every BinNet blob, so the parser can be developed without another capture.
+
+#### Message blobs ("BinNet"), verified (2026-11-07)
+
+`ChatContent.BinNet` is a list of TLV records: `u32 BE tag`, `u32 BE length`, value, nested for containers. Implemented as `parseBinNet` in `server/binnet.ts`; on all 59,965 blobs of a real backup its output equals Zalo's library output exactly.
+
+| Container tag | Becomes | Fields (tag: name, type) |
+|---|---|---|
+| 5 | `property` | 30 size, 31 subType, 32 type (i32); 33 ext (string, JSON text) |
+| 6 (repeats) | `attachs[]` | 40 type (string), 41 catId, 42 id, 44 childNumber (i32); 43 extInfo, 45 action, 46 params, 47 title, 48 href, 49 thumb, 50 description, 66 remains, 67 zinstantData, 68 zinstantMsg (strings) |
+| 7 | `quote` | 80 ownerId, 83 cliMsgType (i32); 81 cliMsgId, 82 globalMsgId, 84 ts, 85 ttl (i64); 86 msg, 87 attach, 88 fromD (strings) |
+| 8 (repeats) | `mentions[]` | 100 type, 101 uid, 102 pos, 103 len (i32) |
+| 11 | `reference` | 170 type (i32), 171 data (string) |
+
+Integers are signed big-endian (`childNumber` is -1 when unused); `i64` values come out as JSON numbers like the library's. Other top-level tags (10, 15, 17 and their children) carry sender display data and extras that the library does not return in `data`, so they are ignored. Method: infer tag-to-field pairs by matching each record's value against the library's parsed JSON over a sample, write the tables, then compare over every blob and fix the differences (the quote `ttl` and three rare attachment fields were the only gaps).

@@ -6,6 +6,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } fr
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { decodeEventData } from "../node_modules/zca-js/dist/utils.js";
+import { parseBinNet } from "./binnet";
 import { backupChats, nativeLib, readChat, toRaw, unwrapKey } from "./crossdb";
 
 export type Deps = {
@@ -18,6 +19,15 @@ export type Deps = {
   batch: (fn: () => void) => void;
   afterImport: () => Promise<void>;
   resume?: boolean; // import the already decrypted backup left in the cache folder, without asking the phone
+};
+
+// Message blobs are parsed by our own code (server/binnet.ts), identical to Zalo's library on 59,965 real blobs.
+const parseBlob = (b: Uint8Array) => {
+  try {
+    return { result: 0, data: parseBinNet(b) };
+  } catch {
+    return { result: 1 };
+  }
 };
 
 let running = false;
@@ -141,7 +151,7 @@ export async function phoneSync(d: Deps): Promise<{ chats: number; messages: num
         const threadId = real.get(`${c.group ? "gids" : "fids"}:${c.id}`);
         if (!threadId) return;
         for (const row of rows[n]!) {
-          d.ingest(toRaw(row, person, nativeLib().parseBinNet), threadId, c.group ? 1 : 0);
+          d.ingest(toRaw(row, person, parseBlob), threadId, c.group ? 1 : 0);
           messages++;
         }
       });
