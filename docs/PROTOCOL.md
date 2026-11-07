@@ -165,3 +165,30 @@ Implemented in `server/transfer.ts` (flow) and `server/crossdb.ts` (backup reade
 10. **Quirk**: after `delete_snapshot_mobile_msg`, the phone answers a new request at once with its cached reply, whose download then returns 404 because the file is gone. Keep the decrypted copy until the import has succeeded (`phone_sync` with `resume: true` re-imports it).
 
 Import policy: the history is a cache. `server/index.ts` keeps the newest `ZL_CACHE_PER_CHAT` (default 3000) messages per chat, so the import brings in at most that many per chat; the download and decrypted databases live under `<data dir>/cache/transfer` and are deleted afterwards.
+
+#### Backup container format, from the decompiled Zalo PC library (2026-11-07)
+
+Source: static analysis of `db-cross-v4-native.node` (arm64, not stripped: functions `_decode_stream`, `DecompressAndDecryptDb_V2`, `decompress_file`, `read_header`, `ZCUtil::DecompressProcessV2`, `parse_bin_net`, `ParseAttachChatMsg`) with Ghidra 12.2 headless. The library is a thin wrapper around three public pieces: AES (128-bit, CBC and CFB), the 7-Zip LZMA SDK (`LzmaDec`) and liblzma (`lzma_stream_decoder`). Not yet verified against a real backup: every statement below comes from reading code.
+
+**Layer A, per file (`_decode_stream`): AES-128-CBC then LZMA1.**
+1. `key16` = the first 16 bytes of the **ASCII hex MD5 of the secret string** (the secret is the RSA-unwrapped `encrypted_key`: hex for format 1, base64 for format 0; the V2 entry point passes it upper-cased).
+2. Optional first 4 bytes (read only when the caller's version int is not negative).
+3. 64 bytes: the stored MD5 text of the data. Only the first 32 bytes are used, XORed byte for byte with the 32 ASCII chars of the key's MD5 hex. It is printed as "MD5 read from encrypted file".
+4. 16 bytes: the CBC **IV**.
+5. Ciphertext in 16-byte blocks, AES-128-CBC. The first decrypted block starts with the 13-byte "LZMA alone" header: 5 bytes of LZMA properties, then the 8-byte little-endian uncompressed size (0 is an error, all-ones means unknown size). The remaining bytes of that block are LZMA data.
+6. Plaintext is fed to `LzmaDec_DecodeToBuf` in chunks of up to 64 KB while an MD5 of the decrypted (compressed) bytes is accumulated, compared against the stored MD5.
+7. **Ending:** when a read returns fewer than 16 bytes, its first byte's low nibble says how many bytes of the last decrypted block are valid (0 means all 16). That short trailer is not decrypted.
+- Error codes seen: -1 bad arguments, -2 cannot read input, -3/-4/-5/-6 short reads, -7 cannot write, -8 zero size.
+
+**Layer B, the archive that Layer A yields (`decompress_file`).** All integers are big-endian.
+- bytes 0..5: 6 bytes of magic or version (not yet identified).
+- offset 6: `u32 headerEnd` (at least 14).
+- offset 10: `u32 xxhash32` of bytes `[14, headerEnd)` (seed 0), checked before anything else.
+- offset 14: `u32 fileCount`, then `fileCount` entries: `u32 nameLen` (at most 128), the name bytes, `u32 size` (at most 2 billion). Names are the per-chat file names (`<id>.db`, `group_<id>.db`).
+- From `headerEnd` to the end: one **XZ stream** (`lzma_stream_decoder`, concatenated mode). Its decompressed bytes are the files back to back, split by the `size` fields in order.
+
+**Not yet read:** the 6-byte magic, whether the V2 path wraps these two layers differently from V1 (`DecompressAndDecryptDb`, format 0), the `parse_bin_net` / `ParseAttachChatMsg` message format (1,304 + 806 lines of pseudocode), and the exact padding rule on a final block that is exactly 16 bytes long.
+
+**Decoders for a native-free reimplementation (checked on npm, 2026-11-07):** `lzma1` 0.8.0 (pure JS, MIT or Apache-2.0, decodes the 13-byte-header "LZMA alone" layout used by Layer A) and `xz-decompress` 0.2.3 (WebAssembly, MIT, 52 KB, decodes the Layer B XZ stream). Neither is added to the project yet.
+
+**Tooling note:** the Homebrew Ghidra package ships no native decompiler for Apple silicon. It was built from the bundled source (`Features/Decompiler/src/decompile/cpp`, with `-arch arm64`) and placed at `Ghidra/Features/Decompiler/os/mac_arm_64/decompile`. REA 6.4.0 rejects Ghidra 12.2 (it wants 12.1.x), so the analysis ran through `analyzeHeadless` with a small script that dumps every function's pseudocode.
