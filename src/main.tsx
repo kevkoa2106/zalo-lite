@@ -511,7 +511,7 @@ function ConvList(p: {
                     {PREVIEW_ICON[t.previewKind] && <Icon name={PREVIEW_ICON[t.previewKind]!} size={16} />}
                     <span>{t.preview}</span>
                   </span>
-                  {t.unread > 0 && <span class="badge" aria-label={`${t.unread} tin nhắn chưa đọc`}>{t.unread > 5 ? "5+" : t.unread}</span>}
+                  {t.unread > 0 && <span class="badge" aria-label={`${t.unread} tin nhắn chưa đọc`}>{t.unread > 99 ? "99+" : t.unread}</span>}
                 </span>
               </span>
             </button>

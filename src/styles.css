@@ -154,7 +154,8 @@ img { display: block; }
 .item .pv { flex: 1; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 4px; }
 .item .pv svg { flex: none; }
 .item .pv span { overflow: hidden; text-overflow: ellipsis; }
-.item.unread .name, .item.unread .pv { font-weight: 600; color: var(--text); }
+/* Unread rows: name and time go semibold and bright; the preview stays regular, as in Zalo PC. */
+.item.unread .name, .item.unread .time { font-weight: 600; color: var(--text); }
 .badge {
   flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--badge);
   color: #fff; font-size: 12px; line-height: 20px; text-align: center; font-weight: 600;
