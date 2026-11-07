@@ -481,7 +481,7 @@ function ingest(raw: Record<string, any>, threadId: string, type: ThreadType, li
   if (m.kind === "sticker") stickerImage(m);
   store.putMsg(m);
   if (m.from !== me.id && m.dName && !store.person(m.from)) store.putPerson(m.from, m.dName, "");
-  const t = touchThread(m, live && !prev && m.from !== me.id && threadId !== activeThread);
+  const t = touchThread(m, live && !prev && !m.undone && m.from !== me.id && threadId !== activeThread);
   if (type === 0 && t.name === t.id && !pendingPeople.has(t.id)) {
     pendingPeople.add(t.id);
     fetchPeople([t.id]).then(() => {
