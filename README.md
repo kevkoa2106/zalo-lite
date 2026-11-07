@@ -29,7 +29,7 @@ A lightweight desktop client for the messaging part of [Zalo](https://zalo.me), 
 
 Settings menu, then **Đồng bộ tin nhắn từ điện thoại**. Your phone shows a sync prompt: accept it there. The backend then downloads the backup, decrypts it, maps Zalo's short ids to real ones, imports the newest messages per chat, and deletes everything it downloaded.
 
-Decrypting needs the native library that ships with an installed **Zalo PC** (`/Applications/Zalo.app`). Without it, everything else still works. The full protocol write-up is in [docs/PROTOCOL.md](docs/PROTOCOL.md).
+Zalo Lite decrypts and reads the backup with its own code, so Zalo PC is not needed. If its own decoder ever fails an integrity check, a macOS machine with Zalo PC installed falls back to Zalo's library. The full protocol write-up, including the backup format, is in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Download
 
@@ -37,12 +37,12 @@ Installers for macOS (Apple silicon and Intel), Linux and Windows are attached t
 
 | Platform | Chat, groups, stickers, call records | Phone history sync |
 |---|---|---|
-| macOS | yes (tested) | yes, needs Zalo PC installed |
-| Linux, Windows | yes, built and released but not yet tested by the maintainer | not yet: it reads Zalo PC's macOS library |
+| macOS | yes (tested) | yes (tested) |
+| Linux, Windows | yes, built and released but not yet tested by the maintainer | implemented with the same code, not yet tested |
 
 ## Getting started
 
-Requirements: macOS, [Bun](https://bun.sh), [Rust](https://rustup.rs) with the [Tauri prerequisites](https://tauri.app/start/prerequisites/). Zalo PC is optional (phone sync only).
+Requirements: macOS, [Bun](https://bun.sh), [Rust](https://rustup.rs) with the [Tauri prerequisites](https://tauri.app/start/prerequisites/). 
 
 ```bash
 bun install

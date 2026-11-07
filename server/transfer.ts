@@ -7,6 +7,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { decodeEventData } from "../node_modules/zca-js/dist/utils.js";
 import { parseBinNet } from "./binnet";
+import { decryptBackup, unpackArchive } from "./crossdb-native-free";
 import { backupChats, nativeLib, readChat, toRaw, unwrapKey } from "./crossdb";
 
 export type Deps = {
@@ -110,8 +111,25 @@ export async function phoneSync(d: Deps): Promise<{ chats: number; messages: num
         mkdirSync(fx, { recursive: true, mode: 0o700 });
         copyFileSync(enc, join(fx, "backup.enc"));
       }
-      const lib = nativeLib();
-      const r: any = format === 1 ? lib.decompressAndDecryptDb_V2(enc, out + "/", secret.toUpperCase(), () => {}) : lib.decompressAndDecryptDb(enc, join(out, "backup.db"), secret);
+      // Our own decoder first (AES-256-CBC, then the archive); its header hash and size checks are the proof it worked.
+      // Zalo PC's library is only the fallback, and the fixture capture always uses it so the library stays the oracle.
+      let r: any = { result: 1 };
+      if (format === 1 && process.env.ZL_KEEP_FIXTURE !== "1") {
+        try {
+          const files = await unpackArchive(decryptBackup(new Uint8Array(await Bun.file(enc).arrayBuffer()), secret.toUpperCase()));
+          for (const f of files) await Bun.write(join(out, f.name), f.data);
+          r = { result: 0 };
+          console.log("backup: decoded without Zalo PC's library");
+        } catch (e) {
+          console.error("backup: own decoder failed, falling back to Zalo PC's library:", e);
+          rmSync(out, { recursive: true, force: true });
+          mkdirSync(out, { recursive: true });
+        }
+      }
+      if (r.result !== 0) {
+        const lib = nativeLib();
+        r = format === 1 ? lib.decompressAndDecryptDb_V2(enc, out + "/", secret.toUpperCase(), () => {}) : lib.decompressAndDecryptDb(enc, join(out, "backup.db"), secret);
+      }
       if (r.result !== 0) throw new Error(`giải mã thất bại (${r.result})`);
       // Dev only: keep the encrypted file, its key and Zalo's own output, to test a native-free decoder against.
       if (process.env.ZL_KEEP_FIXTURE === "1") {
