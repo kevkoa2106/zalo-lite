@@ -295,7 +295,7 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
         </div>
         <button class="rail-btn" aria-label="Tin nhắn" aria-current={view === "chats" ? "page" : undefined} onClick={() => setView("chats")}>
           <Icon name="chat" size={26} />
-          {totalUnread > 0 && <span class="dot">{totalUnread > 99 ? "99+" : totalUnread}</span>}
+          {totalUnread > 0 && <span class="dot">{totalUnread > 5 ? "5+" : totalUnread}</span>}
         </button>
         <button class="rail-btn" aria-label="Danh bạ" aria-current={view === "contacts" ? "page" : undefined} onClick={() => setView("contacts")}>
           <Icon name="contacts" size={26} />
