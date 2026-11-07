@@ -93,15 +93,19 @@ export async function phoneSync(d: Deps): Promise<{ chats: number; messages: num
 
       d.notify("Đang giải mã…");
       const secret = unwrapKey(String(i.encrypted_key), kp.privateKey as string, format);
+      // Zalo's library decrypts the download in place, so the encrypted bytes must be copied before it runs.
+      const fx = join(d.cacheDir, "..", "fixture");
+      if (process.env.ZL_KEEP_FIXTURE === "1") {
+        rmSync(fx, { recursive: true, force: true });
+        mkdirSync(fx, { recursive: true, mode: 0o700 });
+        copyFileSync(enc, join(fx, "backup.enc"));
+      }
       const lib = nativeLib();
       const r: any = format === 1 ? lib.decompressAndDecryptDb_V2(enc, out + "/", secret.toUpperCase(), () => {}) : lib.decompressAndDecryptDb(enc, join(out, "backup.db"), secret);
       if (r.result !== 0) throw new Error(`giải mã thất bại (${r.result})`);
       // Dev only: keep the encrypted file, its key and Zalo's own output, to test a native-free decoder against.
       if (process.env.ZL_KEEP_FIXTURE === "1") {
-        const fx = join(d.cacheDir, "..", "fixture");
-        rmSync(fx, { recursive: true, force: true });
-        mkdirSync(fx, { recursive: true, mode: 0o700 });
-        copyFileSync(enc, join(fx, "backup.bin"));
+        copyFileSync(enc, join(fx, "backup.dec")); // the decrypted archive (the library overwrote the download)
         cpSync(out, join(fx, "oracle"), { recursive: true });
         writeFileSync(join(fx, "key.json"), JSON.stringify({ format, secret, md5: i.checksum_code, size: i.file_size, db_info: db }), { mode: 0o600 });
         d.notify("Đã lưu mẫu thử (chỉ để phát triển)");
