@@ -28,6 +28,16 @@ export function day(ts: number, now = Date.now()) {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
 
+/** A pause this long between two messages gets its own time pill, as in Zalo PC. */
+export const GAP_MS = 30 * 60 * 1000;
+export const isGap = (prevTs: number, ts: number) => ts - prevTs >= GAP_MS;
+
+/** Label of a time-gap pill: "17:16" today, "17:16 Hôm qua" yesterday, "17:16 dd/MM/yyyy" before that. */
+export function gapLabel(ts: number, now = Date.now()) {
+  const d = day(ts, now);
+  return d === "Hôm nay" ? clock(ts) : `${clock(ts)} ${d}`;
+}
+
 export function size(bytes: number) {
   if (!bytes) return "";
   const u = ["B", "KB", "MB", "GB"];

@@ -2,7 +2,7 @@ import { render } from "preact";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import "./styles.css";
 import { call, on, type Contact, type Limits, type Me, type Msg, type State, type Sticker, type Thread } from "./api";
-import { ago, clock, day, hue, initials, size } from "./format";
+import { ago, clock, day, gapLabel, hue, initials, isGap, size } from "./format";
 import { Icon, type IconName } from "./icons";
 
 // ---------- helpers ----------
@@ -692,13 +692,16 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
   const nameOf = (uid: string, fallback: string) => (uid === meId ? meName : members[uid]?.name || fallback || uid);
   const avatarOf = (uid: string) => (thread.type === 0 && uid === thread.id ? thread.avatar : members[uid]?.avatar ?? "");
 
-  // Group runs of messages by the same sender within 5 minutes, with day separators between days.
+  // Group runs of messages by the same sender within 5 minutes, with a pill at each new day and after every long pause.
   const blocks = useMemo(() => {
     const out: ({ day: string } | { from: string; dName: string; items: Msg[] })[] = [];
     let lastDay = "";
+    let lastTs = 0;
     for (const m of messages ?? []) {
       const d = day(m.ts);
       if (d !== lastDay) out.push({ day: (lastDay = d) });
+      else if (isGap(lastTs, m.ts)) out.push({ day: gapLabel(m.ts) });
+      lastTs = m.ts;
       const prev = out[out.length - 1];
       if (prev && "items" in prev && prev.from === m.from && m.ts - prev.items[prev.items.length - 1]!.ts < 300000) prev.items.push(m);
       else out.push({ from: m.from, dName: m.dName, items: [m] });

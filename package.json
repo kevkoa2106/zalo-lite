@@ -12,7 +12,7 @@
     "sidecar": "bun build --compile --minify server/index.ts --outfile src-tauri/binaries/zalo-lite-server-$(rustc -vV | sed -n \"s/host: //p\")",
     "dev": "bun run sidecar && tauri dev",
     "build": "bun run sidecar && tauri build",
-    "test": "bun test server",
+    "test": "bun test server src",
     "typecheck": "tsc --noEmit -p ."
   },
   "devDependencies": {
