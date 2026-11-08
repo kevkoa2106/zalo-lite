@@ -242,3 +242,9 @@ On a second capture (the encrypted download saved before Zalo's library could ov
 - **Voice message playback:** done.
 - **Voice message recording and sending:** feasible but unverified; go only after one approved live experiment on the upload endpoint. The file-attachment fallback is safe.
 - **Voice calls:** **no-go for now.** It needs the undocumented signalling reverse-engineered from the Zalo PC bundle, plus a WebRTC stack that interoperates with Zalo's `zrtc` layer, TURN credentials, echo cancellation and microphone permissions on three operating systems. That is a project of its own, far from "lightweight", and the whole media stack would run in the user's webview on low-end machines.
+
+### Voice message sending: live experiment (2026-11-08, own "My Documents" chat only)
+- A 2-second AAC (ADTS, 16 kHz mono, 2,430 bytes) was uploaded with zca-js `uploadAttachment` as `voice.aac`. The reply was an ordinary file upload (`fileType: "others"`) with `fileUrl` on `f41-zfcloud.zdn.vn`.
+- That `fileUrl` was then passed to `sendVoice` as `voiceUrl`. Zalo accepted it (reply `{msgId}`) and the realtime echo was a **`chat.voice`** message whose params keys were only `fileSize` and `m4a`. So the file host's URL works as a voice message: no separate voice upload endpoint is needed.
+- Missing from a message sent this way: `duration` and `waveformSamples` (received voice messages carry both, see above). The `sendVoice` payload has no field for them. The UI therefore shows 0:00 and a flat waveform for such messages unless the client reads the length from the audio itself. Whether Zalo accepts `duration` and `waveformSamples` added to `msgInfo` is untested.
+- Not verified: that the message plays on the phone and in Zalo PC (check the "My Documents" chat), and recording format conversion (see above).
