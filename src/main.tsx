@@ -2,7 +2,7 @@ import { render } from "preact";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import "./styles.css";
 import { call, on, type Contact, type Limits, type Me, type Msg, type State, type Sticker, type Thread } from "./api";
-import { ago, builtInMic, clock, day, findQuoted, gapLabel, hue, initials, isGap, size, splitMentions, voiceExt, type Mention } from "./format";
+import { ago, clock, day, findQuoted, gapLabel, hue, initials, isGap, size, splitMentions, voiceExt, type Mention } from "./format";
 import { Icon, type IconName } from "./icons";
 
 // ---------- helpers ----------
@@ -1308,14 +1308,9 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
   async function startRec() {
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // A Bluetooth headset's microphone records short, garbled clips here; use the built-in one when there is one.
-      const alt = builtInMic(stream.getAudioTracks()[0]?.label ?? "", (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput"));
-      if (alt) {
-        stream.getTracks().forEach((t) => t.stop());
-        stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: alt } } });
-        flash("Đang ghi âm bằng micro của máy (micro tai nghe Bluetooth thu âm kém)");
-      }
+      // The system's voice processing (echo cancellation, noise suppression, gain) cuts audio from a Bluetooth headset in this
+      // webview: 10 s recordings came back 8.6 s with a quiet start, and 9.96 s and 9.98 s with all three off (measured with AirPods).
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
     } catch {
       return flash("Không dùng được micro. Hãy cho phép Zalo Lite truy cập micro trong cài đặt hệ thống");
     }

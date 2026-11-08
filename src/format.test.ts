@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { GAP_MS, builtInMic, findQuoted, gapLabel, isGap, splitMentions, voiceExt } from "./format";
+import { GAP_MS, findQuoted, gapLabel, isGap, splitMentions, voiceExt } from "./format";
 
 const at = (y: number, mo: number, d: number, h: number, mi: number) => new Date(y, mo - 1, d, h, mi).getTime();
 const now = at(2026, 11, 7, 12, 0);
@@ -40,14 +40,4 @@ test("voiceExt maps the recorder's type to a file extension the backend accepts"
   expect(voiceExt("audio/webm;codecs=opus")).toBe("webm");
   expect(voiceExt("audio/ogg;codecs=opus")).toBe("ogg");
   expect(voiceExt("")).toBe("m4a");
-});
-
-test("builtInMic swaps a Bluetooth headset's microphone for the built-in one, otherwise keeps the current", () => {
-  const devs = [{ deviceId: "a", label: "AirPods của Khoa" }, { deviceId: "b", label: "MacBook Pro Microphone" }, { deviceId: "c", label: "FaceCam 1000X" }];
-  expect(builtInMic("AirPods của Khoa", devs)).toBe("b");
-  expect(builtInMic("Galaxy Buds Pro", devs)).toBe("b");
-  expect(builtInMic("MacBook Pro Microphone", devs)).toBeNull();
-  expect(builtInMic("FaceCam 1000X", devs)).toBeNull();
-  expect(builtInMic("AirPods", [devs[0]!, devs[2]!])).toBeNull(); // no built-in one to fall back to
-  expect(builtInMic("", [])).toBeNull();
 });

@@ -38,15 +38,6 @@ export function gapLabel(ts: number, now = Date.now()) {
   return d === "Hôm nay" ? clock(ts) : `${clock(ts)} ${d}`;
 }
 
-/**
- * A Bluetooth headset's microphone drops the whole headset to phone-call quality and records short, garbled clips in webviews.
- * When the microphone in use is one, returns the id of the built-in microphone to use instead (null: keep the current one).
- */
-export function builtInMic(current: string, devices: { deviceId: string; label: string }[]) {
-  if (!/airpods|bluetooth|headset|hands-free|buds/i.test(current)) return null;
-  return devices.find((d) => /built-in|macbook|internal|array/i.test(d.label) && d.deviceId)?.deviceId ?? null;
-}
-
 /** File extension for a recorded voice. Zalo's own voice files are AAC, which Apple's webview records as audio/mp4. */
 export const voiceExt = (mime: string) => (/webm/.test(mime) ? "webm" : /ogg/.test(mime) ? "ogg" : "m4a");
 
