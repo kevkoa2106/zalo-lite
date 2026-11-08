@@ -38,6 +38,27 @@ export function gapLabel(ts: number, now = Date.now()) {
   return d === "Hôm nay" ? clock(ts) : `${clock(ts)} ${d}`;
 }
 
+export type Mention = { uid: string; pos: number; len: number };
+
+/** Split a message into plain and mention parts. A range that is empty, outside the text, or overlaps an earlier one is ignored. */
+export function splitMentions(text: string, mentions: Mention[] = []) {
+  const out: { text: string; mention?: boolean }[] = [];
+  let at = 0;
+  for (const m of [...mentions].sort((a, b) => a.pos - b.pos)) {
+    if (!(m.len > 0) || !(m.pos >= at) || m.pos + m.len > text.length) continue;
+    if (m.pos > at) out.push({ text: text.slice(at, m.pos) });
+    out.push({ text: text.slice(m.pos, m.pos + m.len), mention: true });
+    at = m.pos + m.len;
+  }
+  if (at < text.length) out.push({ text: text.slice(at) });
+  return out;
+}
+
+/** The message a reply quotes: by id, else by timestamp and sender (ids are JS numbers and can lose precision). */
+export function findQuoted<T extends { id: string; ts: number; from: string }>(msgs: T[], q: { id?: string; ts?: number; from: string }) {
+  return (q.id ? msgs.find((m) => m.id === q.id) : undefined) ?? (q.ts ? msgs.find((m) => m.ts === q.ts && m.from === q.from) : undefined);
+}
+
 export function size(bytes: number) {
   if (!bytes) return "";
   const u = ["B", "KB", "MB", "GB"];

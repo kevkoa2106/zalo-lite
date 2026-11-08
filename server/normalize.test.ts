@@ -22,6 +22,20 @@ test("photo with params and quote", () => {
   expect(previewOf(m)).toBe("Hình ảnh");
 });
 
+test("quote keeps the quoted message's ids and ts; mentions keep their ranges", () => {
+  const m = normalize(
+    {
+      msgId: "9", uidFrom: "u9", dName: "Timmy", msgType: "webchat", ts: "5", content: "@Billie",
+      quote: { ownerId: "u2", fromD: "Billie", msg: "hi", cliMsgType: 1, globalMsgId: 123, cliMsgId: 45, ts: "100" },
+      mentions: [{ uid: "u2", pos: 0, len: 7, type: 0 }],
+    },
+    "g", 1, "me",
+  );
+  expect(m.quote).toEqual({ from: "u2", dName: "Billie", text: "hi", id: "123", cliMsgId: "45", ts: 100 });
+  expect(m.mentions).toEqual([{ uid: "u2", pos: 0, len: 7 }]);
+  expect(normalize({ msgId: "10", uidFrom: "u", msgType: "webchat", ts: "1", content: "x" }, "g", 1, "me").mentions).toBeUndefined();
+});
+
 test("recalled and unknown types", () => {
   expect(normalize({ msgId: "4", uidFrom: "u", msgType: "chat.undo", content: {}, ts: "1" }, "t", 0, "me").undone).toBe(true);
   expect(normalize({ msgId: "5", uidFrom: "u", msgType: "chat.location.new", content: {}, ts: "1" }, "t", 0, "me").kind).toBe("other");

@@ -99,7 +99,14 @@ export function normalize(raw: Raw, threadId: string, type: 0 | 1, ownId: string
     kind,
     text,
     attach,
-    quote: q ? { from: String(q.ownerId), dName: String(q.fromD ?? ""), text: String(q.msg || LABELS[KINDS[q.cliMsgType] ?? "other"] || "") } : null,
+    quote: q
+      ? {
+          from: String(q.ownerId), dName: String(q.fromD ?? ""), text: String(q.msg || LABELS[KINDS[q.cliMsgType] ?? "other"] || ""),
+          // ids are JS numbers and can exceed 2^53, so the UI falls back to ts when the id finds nothing
+          ...(q.globalMsgId && { id: String(q.globalMsgId) }), ...(q.cliMsgId && { cliMsgId: String(q.cliMsgId) }), ...(q.ts && { ts: Number(q.ts) || undefined }),
+        }
+      : null,
+    ...(Array.isArray(raw.mentions) && raw.mentions.length && { mentions: raw.mentions.map((x: Raw) => ({ uid: String(x.uid), pos: Number(x.pos), len: Number(x.len) })) }),
     undone: raw.msgType === "chat.undo",
     reactions: {},
     raw,

@@ -13,7 +13,8 @@ export type Msg = {
   kind: Kind;
   text: string;
   attach: Record<string, unknown> | null;
-  quote: { from: string; dName: string; text: string } | null;
+  quote: { from: string; dName: string; text: string; id?: string; cliMsgId?: string; ts?: number } | null; // id/ts locate the quoted message
+  mentions?: { uid: string; pos: number; len: number }[]; // ranges of "@name" inside `text` ("-1" = everyone)
   undone: boolean;
   reactions: Record<string, string>; // uid -> icon
   raw: Record<string, unknown>; // original TMessage, needed for seen/quote/delete

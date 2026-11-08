@@ -18,7 +18,8 @@ export type Msg = {
   kind: Kind;
   text: string;
   attach: Record<string, any> | null;
-  quote: { from: string; dName: string; text: string } | null;
+  quote: { from: string; dName: string; text: string; id?: string; cliMsgId?: string; ts?: number } | null;
+  mentions?: { uid: string; pos: number; len: number }[];
   undone: boolean;
   reactions: Record<string, string>;
   pending?: boolean;

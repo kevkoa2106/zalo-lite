@@ -2,7 +2,7 @@ import { render } from "preact";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import "./styles.css";
 import { call, on, type Contact, type Limits, type Me, type Msg, type State, type Sticker, type Thread } from "./api";
-import { ago, clock, day, gapLabel, hue, initials, isGap, size } from "./format";
+import { ago, clock, day, findQuoted, gapLabel, hue, initials, isGap, size, splitMentions, type Mention } from "./format";
 import { Icon, type IconName } from "./icons";
 
 // ---------- helpers ----------
@@ -596,6 +596,37 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
     }
   }
 
+  // Scroll to the message a reply quotes, loading older pages until it turns up (at most 20 pages, 1,000 messages).
+  async function jumpTo(q: NonNullable<Msg["quote"]>) {
+    let have = messages ?? [];
+    let target = findQuoted(have, q);
+    let moreLeft = more;
+    const loaded: Msg[] = [];
+    for (let n = 0; !target && moreLeft && n < 20; n++) {
+      const r = await call<{ messages: Msg[] }>("open", { threadId: thread.id, type: thread.type, before: have[0]!.ts }).catch(() => null);
+      if (!r) break;
+      if (r.messages.length < 50) moreLeft = false;
+      const fresh = r.messages.filter((m) => !have.some((c) => c.id === m.id));
+      if (!fresh.length) break;
+      loaded.unshift(...fresh);
+      have = [...fresh, ...have];
+      target = findQuoted(have, q);
+    }
+    if (!target) return flash("Không tìm thấy tin nhắn gốc, có thể đã cũ hơn bộ nhớ của ứng dụng");
+    stick.current = false;
+    if (loaded.length) {
+      setMore(moreLeft);
+      setMessages((cur) => [...loaded.filter((m) => !cur.some((c) => c.id === m.id)), ...cur]);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); // let the new rows render first
+    }
+    const row = scroller.current?.querySelector<HTMLElement>(`[data-id="${CSS.escape(target.id)}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    const bubble = row.querySelector(".bubble");
+    bubble?.classList.add("flash");
+    setTimeout(() => bubble?.classList.remove("flash"), 1500);
+  }
+
   function onScroll() {
     const el = scroller.current!;
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -760,6 +791,7 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
                     meId={meId}
                     onReply={() => setReplyTo(m)}
                     onView={setViewer}
+                    onJump={jumpTo}
                     flash={flash}
                     onRetry={retries.current.get(m.id)}
                     onDismiss={() => dismiss([m.id])}
@@ -796,24 +828,29 @@ const toB64 = (f: Blob) =>
   });
 
 const URL_RE = /(https?:\/\/[^\s<]+[^\s<.,:;"')\]!?])/g;
-function Linkified({ text }: { text: string }) {
-  const parts = text.split(URL_RE);
+function Linkified({ text, mentions }: { text: string; mentions?: Mention[] }) {
   return (
     <>
-      {parts.map((s, i) =>
-        i % 2 ? (
-          <a href={s} onClick={(e) => (e.preventDefault(), openExternal(s))}>{s}</a>
+      {splitMentions(text, mentions).map((p) =>
+        p.mention ? (
+          <span class="mention">{p.text}</span>
         ) : (
-          s
+          p.text.split(URL_RE).map((s, i) =>
+            i % 2 ? (
+              <a href={s} onClick={(e) => (e.preventDefault(), openExternal(s))}>{s}</a>
+            ) : (
+              s
+            ),
+          )
         ),
       )}
     </>
   );
 }
 
-function Bubble({ m, mine, last, meId, onReply, onView, flash, onRetry, onDismiss }: {
-  m: Msg; mine: boolean; last: boolean; meId: string; onReply: () => void; onView: (src: string) => void; flash: (t: string) => void;
-  onRetry?: () => void; onDismiss?: () => void;
+function Bubble({ m, mine, last, meId, onReply, onView, onJump, flash, onRetry, onDismiss }: {
+  m: Msg; mine: boolean; last: boolean; meId: string; onReply: () => void; onView: (src: string) => void; onJump: (q: NonNullable<Msg["quote"]>) => void;
+  flash: (t: string) => void; onRetry?: () => void; onDismiss?: () => void;
 }) {
   const [pop, setPop] = useState<null | { kind: "react" | "more"; x: number; y: number }>(null);
   const a = m.attach ?? {};
@@ -926,7 +963,7 @@ function Bubble({ m, mine, last, meId, onReply, onView, flash, onRetry, onDismis
         body = <><i>Tin nhắn này chưa được hỗ trợ hiển thị.</i>{meta}</>;
         break;
       default:
-        body = <><Linkified text={m.text} />{meta}</>;
+        body = <><Linkified text={m.text} mentions={m.mentions} />{meta}</>;
     }
 
   const openPop = (kind: "react" | "more") => (e: MouseEvent) => {
@@ -940,10 +977,24 @@ function Bubble({ m, mine, last, meId, onReply, onView, flash, onRetry, onDismis
   const canAct = !m.pending && !m.failed && !m.id.startsWith("tmp-");
 
   return (
-    <div class={`msg${reactions.length ? " has-reacts" : ""}`}>
+    <div class={`msg${reactions.length ? " has-reacts" : ""}`} data-id={m.id}>
       <div class={`bubble${bare ? " bare" : ""}${m.undone ? " recalled" : ""}${m.pending ? " pending" : ""}${m.failed ? " failed" : ""}`}>
         {m.quote && !m.undone && (
-          <span class="quote"><b>{m.quote.dName || "Tin nhắn"}</b><span>{m.quote.text}</span></span>
+          // Clickable only when the quote says which message it quotes; backup-imported replies carry no id.
+          <span
+            class={`quote${m.quote.id || m.quote.ts ? " jump" : ""}`}
+            {...(m.quote.id || m.quote.ts
+              ? {
+                  role: "button",
+                  tabIndex: 0,
+                  title: "Đi tới tin nhắn gốc",
+                  onClick: () => onJump(m.quote!),
+                  onKeyDown: (e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onJump(m.quote!)),
+                }
+              : {})}
+          >
+            <b>{m.quote.dName || "Tin nhắn"}</b><span>{m.quote.text}</span>
+          </span>
         )}
         {body}
         {reactions.length > 0 && (

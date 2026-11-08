@@ -213,6 +213,14 @@ img { display: block; }
 }
 .quote b { display: block; font-weight: 600; font-size: 12.5px; }
 .quote span { color: var(--text-2); }
+.quote.jump { cursor: pointer; transition: background-color 0.15s; }
+.quote.jump:hover { background: color-mix(in srgb, var(--accent) 22%, var(--quote)); }
+.mention { color: var(--accent-text); }
+.bubble.flash { animation: flash 1.5s ease-out; }
+@keyframes flash {
+  0%, 40% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 60%, transparent); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
 .photo { border-radius: 10px; overflow: hidden; background: var(--raised); cursor: zoom-in; }
 .photo img { max-width: 360px; max-height: 360px; width: auto; height: auto; object-fit: cover; }
 .sticker img { width: 130px; height: 130px; object-fit: contain; }
