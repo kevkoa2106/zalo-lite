@@ -2,7 +2,7 @@
   "name": "zalo-lite",
   "type": "module",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Lightweight unofficial desktop client for Zalo messaging (Tauri + Bun)",
   "license": "MIT",
   "scripts": {
