@@ -28,6 +28,10 @@
     ],
     "externalBin": [
       "binaries/zalo-lite-server"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "-",
+      "hardenedRuntime": false
+    }
   }
 }

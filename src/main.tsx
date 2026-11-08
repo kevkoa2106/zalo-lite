@@ -1293,25 +1293,33 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
   const [text, setText] = useState("");
   // Voice recording: the mic button starts it, the bin discards it, the send button stops it and sends the clip.
   const [recMs, setRecMs] = useState<number | null>(null);
-  const rec = useRef<{ mr: MediaRecorder; stream: MediaStream; chunks: Blob[]; send: boolean; t0: number } | null>(null);
+  const rec = useRef<{ mr: MediaRecorder; stream: MediaStream; chunks: Blob[]; send: boolean; t0: number; ac: AudioContext; an: AnalyserNode; peak: number } | null>(null);
 
   async function startRec() {
+    const ac = new AudioContext(); // made inside the click so the page may use it
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
+      ac.close();
       return flash("Không dùng được micro. Hãy cho phép Zalo Lite truy cập micro trong cài đặt hệ thống");
     }
+    // When the system refuses the microphone without saying so, the page still gets a stream, but one of pure silence.
+    const an = ac.createAnalyser();
+    ac.createMediaStreamSource(stream).connect(an);
     // AAC (audio/mp4) is what Zalo's own voice messages use; other webviews record webm/opus.
     const type = ["audio/mp4", "audio/webm;codecs=opus", "audio/ogg;codecs=opus"].find((t) => MediaRecorder.isTypeSupported(t));
     const mr = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
-    const r = { mr, stream, chunks: [] as Blob[], send: false, t0: Date.now() };
+    const r = { mr, stream, chunks: [] as Blob[], send: false, t0: Date.now(), ac, an, peak: 0 };
     mr.ondataavailable = (e) => e.data.size && r.chunks.push(e.data);
     mr.onstop = () => {
       stream.getTracks().forEach((t) => t.stop());
+      ac.close();
       const ms = Date.now() - r.t0;
-      if (r.send && ms >= 600) onVoice(new Blob(r.chunks, { type: mr.mimeType || type || "audio/mp4" }), ms);
-      else if (r.send) flash("Ghi âm quá ngắn");
+      const blob = new Blob(r.chunks, { type: mr.mimeType || type || "audio/mp4" });
+      if (r.send && ms < 600) flash("Ghi âm quá ngắn");
+      else if (r.send && (!blob.size || r.peak === 0)) flash("Micro không thu được âm thanh. Hãy cho phép Zalo Lite dùng micro trong Cài đặt hệ thống > Quyền riêng tư & Bảo mật > Micro");
+      else if (r.send) onVoice(blob, ms);
       rec.current = null;
       setRecMs(null);
     };
@@ -1327,8 +1335,12 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
   }
   useEffect(() => {
     if (recMs === null) return;
+    const samples = new Float32Array(2048);
     const t = setInterval(() => {
-      const ms = Date.now() - rec.current!.t0;
+      const r = rec.current!;
+      r.an.getFloatTimeDomainData(samples);
+      for (const v of samples) r.peak = Math.max(r.peak, Math.abs(v));
+      const ms = Date.now() - r.t0;
       setRecMs(ms);
       if (ms >= MAX_VOICE_MS) (flash("Đã đạt tối đa 5 phút, đang gửi"), stopRec(true));
     }, 250);
