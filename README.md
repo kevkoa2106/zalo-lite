@@ -83,9 +83,17 @@ All optional, set as environment variables.
 
 - **One web session at a time.** Like Zalo Web, signing in here signs out other web or PC sessions.
 - **Group history.** Zalo withholds some group history from new devices; phone sync fills most of it.
-- **Calls.** Call records are shown, but placing or answering calls is not supported.
-- **Not implemented yet:** @mentions, forwarding, labels (Phân loại), video and voice calls, files over 100 MB.
-- **macOS first.** Linux and Windows builds are released from CI, but only macOS has been run by hand.
+- **Calls.** Call records are shown, but placing or answering voice or video calls is not supported. Zalo PC runs calls in a separate native WebRTC process with signalling that is not documented here, so this is a project of its own ([feasibility notes](docs/PROTOCOL.md)).
+- **Voice messages.**
+  - Zalo deletes old voice files from its servers, so older ones (including those imported from the phone) show "Đã hết hạn" and cannot be played.
+  - Recordings are limited to 5 minutes and come out as AAC on macOS. On Windows and Linux the webview records WebM/Opus, which Zalo's phone app may not play (untested).
+  - A message you send shows a flat waveform until it has been played once, and the player has no seek bar.
+  - Recording turns the system's echo cancellation, noise suppression and gain control off, because they cut audio from Bluetooth headsets (measured with AirPods). The first second after pressing the mic button can be quiet while a headset switches modes.
+  - Allow the microphone when macOS asks; if it was denied, turn it on in System Settings, Privacy & Security, Microphone.
+- **Mentions are display-only.** `@name` shows in blue, but you cannot yet pick someone with `@` while typing. Messages imported from the phone carry no mentions and no reply targets, so their quotes are not clickable.
+- **Old messages are slimmed.** Beyond the newest 200 messages per chat, the app drops Zalo's duplicate copy of each message to save disk space. Replying to such an old message is rebuilt from its stored text and has not been tried against Zalo.
+- **Not implemented yet:** forwarding, labels (Phân loại), video and voice calls, files over 100 MB, searching message text (the search box only filters the conversation list).
+- **macOS first.** Linux and Windows builds are released from CI, but only macOS has been run by hand. Phone sync, microphone access and audio playback are untested there.
 
 ## Contributing and security
 
