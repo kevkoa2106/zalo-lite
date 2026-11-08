@@ -11,6 +11,8 @@ A lightweight desktop client for the messaging part of [Zalo](https://zalo.me), 
 - **Sign in with a QR code** using Zalo PC's own login, with the web-style QR as a fallback. The session is saved locally and resumed on the next launch.
 - **Conversations** sorted by recency: people, groups, official accounts and My Documents. Dark, light and system themes, laid out like Zalo PC.
 - **Send and receive** text, photos, files, stickers (your own sticker packs plus search and a Recent tab), replies, reactions, recall, delete-for-me, typing indicators and read receipts.
+- **Voice messages:** play them in a waveform bubble and record and send your own with the mic button (up to 5 minutes). Zalo deletes old voice files from its servers, so older ones show "Đã hết hạn".
+- **Mentions and replies:** `@name` is blue, and clicking the quote above a reply scrolls to the original message.
 - **Call records** shown as cards: incoming, missed and declined, with durations.
 - **Older history from your phone.** Zalo keeps old 1:1 history on the phone and withholds group history from new devices, so Zalo Lite can pull a backup from the phone (you accept a prompt there) and import it. See [Phone sync](#phone-sync).
 - **A bounded cache, not an archive.** Each chat keeps its newest 3,000 messages, and nothing is stored in the repository. Messages beyond the newest 200 per chat also drop Zalo's duplicate copy of themselves (about 30% smaller database on a 27,000-message account); quoting such an old message is rebuilt from the stored text.

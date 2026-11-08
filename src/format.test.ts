@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { GAP_MS, findQuoted, gapLabel, isGap, splitMentions } from "./format";
+import { GAP_MS, findQuoted, gapLabel, isGap, splitMentions, voiceExt } from "./format";
 
 const at = (y: number, mo: number, d: number, h: number, mi: number) => new Date(y, mo - 1, d, h, mi).getTime();
 const now = at(2026, 11, 7, 12, 0);
@@ -33,4 +33,11 @@ test("findQuoted prefers the id and falls back to ts and sender", () => {
   expect(findQuoted(msgs, { id: "99", ts: 20, from: "c" })).toBe(msgs[2]); // id lost precision, ts + sender still find it
   expect(findQuoted(msgs, { ts: 30, from: "a" })).toBeUndefined();
   expect(findQuoted(msgs, { from: "a" })).toBeUndefined();
+});
+
+test("voiceExt maps the recorder's type to a file extension the backend accepts", () => {
+  expect(voiceExt("audio/mp4")).toBe("m4a");
+  expect(voiceExt("audio/webm;codecs=opus")).toBe("webm");
+  expect(voiceExt("audio/ogg;codecs=opus")).toBe("ogg");
+  expect(voiceExt("")).toBe("m4a");
 });

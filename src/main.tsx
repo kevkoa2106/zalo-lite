@@ -2,7 +2,7 @@ import { render } from "preact";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import "./styles.css";
 import { call, on, type Contact, type Limits, type Me, type Msg, type State, type Sticker, type Thread } from "./api";
-import { ago, clock, day, findQuoted, gapLabel, hue, initials, isGap, size, splitMentions, type Mention } from "./format";
+import { ago, clock, day, findQuoted, gapLabel, hue, initials, isGap, size, splitMentions, voiceExt, type Mention } from "./format";
 import { Icon, type IconName } from "./icons";
 
 // ---------- helpers ----------
@@ -690,11 +690,26 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
     }
   }
 
+  async function sendVoice(blob: Blob, ms: number) {
+    if (blob.size > limits.maxMB * 1024 * 1024) return flash(`Tin nhắn thoại vượt quá giới hạn ${limits.maxMB} MB của Zalo`);
+    stick.current = true;
+    const url = URL.createObjectURL(blob);
+    const tmp = pendingBubble("voice", { href: url, params: { duration: ms, m4a: url }, local: true });
+    setMessages((m) => [...m, tmp]);
+    try {
+      const r = await call<{ msgIds: string[] }>("voice", { threadId: thread.id, type: thread.type, b64: await toB64(blob), ext: voiceExt(blob.type) });
+      settle([tmp.id], r.msgIds);
+    } catch (e: any) {
+      fail([tmp.id], () => (dismiss([tmp.id]), sendVoice(blob, ms)), `Gửi tin nhắn thoại thất bại: ${e.message}`);
+    }
+  }
+
   function dismiss(ids: string[]) {
     setMessages((list) =>
       list.filter((x) => {
         if (!ids.includes(x.id)) return true;
         if (x.attach?.local && x.attach.thumb) URL.revokeObjectURL(x.attach.thumb);
+        if (x.attach?.local && x.attach.href?.startsWith("blob:")) URL.revokeObjectURL(x.attach.href);
         retries.current.delete(x.id);
         return false;
       }),
@@ -809,7 +824,7 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
           </>
         )}
       </div>
-      <Composer thread={thread} replyTo={replyTo} replyName={replyTo ? nameOf(replyTo.from, replyTo.dName) : ""} cancelReply={() => setReplyTo(null)} onSend={send} onSticker={sendSticker} />
+      <Composer thread={thread} replyTo={replyTo} replyName={replyTo ? nameOf(replyTo.from, replyTo.dName) : ""} cancelReply={() => setReplyTo(null)} onSend={send} onSticker={sendSticker} onVoice={sendVoice} flash={flash} />
       {viewer && (
         <div class="viewer" role="dialog" aria-label="Xem ảnh" tabIndex={-1} onClick={() => setViewer("")} onKeyDown={(e) => e.key === "Escape" && setViewer("")} ref={(el) => el?.focus()}>
           <img src={viewer} alt="" />
@@ -848,56 +863,126 @@ function Linkified({ text, mentions }: { text: string; mentions?: Mention[] }) {
   );
 }
 
-let playing: HTMLAudioElement | null = null; // one voice message plays at a time
+let stopPlaying: (() => void) | null = null; // one voice message plays at a time
+let audioCtx: AudioContext | null = null;
 const mmss = (ms: number) => {
   const s = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
+/** Fetch and decode a voice message. Zalo's files come through the backend (server/media.ts); our own recording is a blob: URL. */
+async function loadVoice(src: string) {
+  const bytes = src.startsWith("blob:")
+    ? await (await fetch(src)).arrayBuffer()
+    : await call<{ b64: string }>("media", { url: src }).then((r) => Uint8Array.from(atob(r.b64), (c) => c.charCodeAt(0)).buffer);
+  audioCtx ??= new AudioContext();
+  return new Promise<AudioBuffer>((res, rej) => audioCtx!.decodeAudioData(bytes, res, rej));
+}
+
+/** Loudness of `n` equal slices of the clip, for the waveform of messages that carry none (ours). */
+function peaks(b: AudioBuffer, n = 24) {
+  const d = b.getChannelData(0);
+  const step = Math.max(1, Math.floor(d.length / n));
+  return Array.from({ length: n }, (_, i) => {
+    let m = 0;
+    for (let j = i * step; j < Math.min(d.length, (i + 1) * step); j++) m = Math.max(m, Math.abs(d[j]!));
+    return m;
+  });
+}
+
 // A voice message as Zalo PC shows it: round play button, waveform that fills as it plays, and the length.
 // Zalo's params carry the audio (`m4a`, an .aac file; older messages only have an .amr `href`), `duration` in ms and a short waveform.
+// The audio is decoded in the page (WebAudio) so it plays the same in every webview, whatever type the file host reports.
+// Zalo deletes old voice files; those show as expired.
 function Voice({ a, flash }: { a: Record<string, any>; flash: (t: string) => void }) {
   const p = (a.params ?? {}) as { duration?: number; m4a?: string; waveformSamples?: number[] };
   const src = String(p.m4a || a.href || "");
-  const total = Number(p.duration) || 0;
-  const audio = useRef<HTMLAudioElement | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "ready" | "gone">("idle");
+  const [total, setTotal] = useState(Number(p.duration) || 0); // ms
+  const [wave, setWave] = useState<number[] | null>(null);
   const [on, setOn] = useState(false);
   const [at, setAt] = useState(0); // ms played
+  const clip = useRef<{ buf: AudioBuffer; node: AudioBufferSourceNode | null; started: number; offset: number; raf: number } | null>(null);
   const bars = useMemo(() => {
-    const w = p.waveformSamples?.length ? p.waveformSamples : Array(24).fill(1);
+    const w = p.waveformSamples?.length ? p.waveformSamples : wave ?? Array(24).fill(1);
     const hi = Math.max(...w, 1);
     return w.map((v) => Math.max(0.15, v / hi));
-  }, [a]);
-  useEffect(() => () => audio.current?.pause(), []);
+  }, [a, wave]);
 
-  function toggle() {
-    let el = audio.current;
-    if (!el) {
-      el = audio.current = new Audio(src);
-      el.ontimeupdate = () => setAt(el!.currentTime * 1000);
-      el.onplay = () => setOn(true);
-      el.onpause = () => setOn(false);
-      el.onended = () => (setOn(false), setAt(0));
+  function pause() {
+    const c = clip.current;
+    if (!c?.node) return;
+    c.offset = audioCtx!.currentTime - c.started;
+    const n = c.node;
+    c.node = null; // so its onended is not taken for the end of the clip
+    n.stop();
+    cancelAnimationFrame(c.raf);
+    setOn(false);
+    if (stopPlaying === pause) stopPlaying = null;
+  }
+  useEffect(() => () => pause(), []);
+
+  async function play() {
+    const c = clip.current!;
+    await audioCtx!.resume();
+    stopPlaying?.();
+    const node = audioCtx!.createBufferSource();
+    node.buffer = c.buf;
+    node.connect(audioCtx!.destination);
+    node.onended = () => {
+      if (c.node !== node) return;
+      c.node = null;
+      c.offset = 0;
+      cancelAnimationFrame(c.raf);
+      setOn(false);
+      setAt(0);
+      if (stopPlaying === pause) stopPlaying = null;
+    };
+    c.node = node;
+    c.started = audioCtx!.currentTime - c.offset;
+    node.start(0, c.offset);
+    const tick = () => {
+      setAt((audioCtx!.currentTime - c.started) * 1000);
+      c.raf = requestAnimationFrame(tick);
+    };
+    tick();
+    stopPlaying = pause;
+    setOn(true);
+  }
+
+  async function toggle() {
+    if (on) return pause();
+    if (!clip.current) {
+      setState("loading");
+      try {
+        const buf = await loadVoice(src);
+        clip.current = { buf, node: null, started: 0, offset: 0, raf: 0 };
+        setTotal(buf.duration * 1000);
+        if (!p.waveformSamples?.length) setWave(peaks(buf));
+        setState("ready");
+      } catch (e: any) {
+        const gone = /hết hạn/.test(e?.message ?? "");
+        setState(gone ? "gone" : "idle");
+        return flash(gone ? e.message : e?.message || "Không phát được tin nhắn thoại");
+      }
     }
-    if (!el.paused) return el.pause();
-    if (playing && playing !== el) playing.pause();
-    playing = el;
-    el.play().catch(() => flash("Không phát được tin nhắn thoại"));
+    play();
   }
 
   const done = total ? at / total : 0;
   return (
-    <div class="voice">
-      <button class="voice-btn" onClick={toggle} aria-label={on ? "Tạm dừng" : "Phát tin nhắn thoại"}>
-        <Icon name={on ? "pause" : "play"} size={16} />
+    <div class={`voice${state === "gone" ? " gone" : ""}`}>
+      <button class="voice-btn" onClick={toggle} disabled={state === "gone" || state === "loading"} aria-label={state === "gone" ? "Tin nhắn thoại đã hết hạn" : on ? "Tạm dừng" : "Phát tin nhắn thoại"}>
+        {state === "loading" ? <span class="spin" /> : <Icon name={on ? "pause" : "play"} size={16} />}
       </button>
       <span class="wave" aria-hidden="true">
         {bars.map((h, i) => <i class={i / bars.length < done ? "on" : ""} style={{ height: `${h * 100}%` }} />)}
       </span>
-      <span class="vtime">{mmss(on || at ? at : total)}</span>
+      <span class="vtime">{state === "gone" ? "Đã hết hạn" : total ? mmss(on || at ? at : total) : ""}</span>
     </div>
   );
 }
+
 
 function Bubble({ m, mine, last, meId, onReply, onView, onJump, flash, onRetry, onDismiss }: {
   m: Msg; mine: boolean; last: boolean; meId: string; onReply: () => void; onView: (src: string) => void; onJump: (q: NonNullable<Msg["quote"]>) => void;
@@ -1199,11 +1284,59 @@ function Thumb({ file }: { file: File }) {
   return src ? <img class="thumb" src={src} alt="" /> : null;
 }
 
-function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker }: {
+const MAX_VOICE_MS = 5 * 60 * 1000;
+
+function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, onVoice, flash }: {
   thread: Thread; replyTo: Msg | null; replyName: string; cancelReply: () => void; onSend: (text: string, files: File[]) => void;
-  onSticker: (s: Sticker) => void;
+  onSticker: (s: Sticker) => void; onVoice: (blob: Blob, ms: number) => void; flash: (t: string) => void;
 }) {
   const [text, setText] = useState("");
+  // Voice recording: the mic button starts it, the bin discards it, the send button stops it and sends the clip.
+  const [recMs, setRecMs] = useState<number | null>(null);
+  const rec = useRef<{ mr: MediaRecorder; stream: MediaStream; chunks: Blob[]; send: boolean; t0: number } | null>(null);
+
+  async function startRec() {
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      return flash("Không dùng được micro. Hãy cho phép Zalo Lite truy cập micro trong cài đặt hệ thống");
+    }
+    // AAC (audio/mp4) is what Zalo's own voice messages use; other webviews record webm/opus.
+    const type = ["audio/mp4", "audio/webm;codecs=opus", "audio/ogg;codecs=opus"].find((t) => MediaRecorder.isTypeSupported(t));
+    const mr = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    const r = { mr, stream, chunks: [] as Blob[], send: false, t0: Date.now() };
+    mr.ondataavailable = (e) => e.data.size && r.chunks.push(e.data);
+    mr.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const ms = Date.now() - r.t0;
+      if (r.send && ms >= 600) onVoice(new Blob(r.chunks, { type: mr.mimeType || type || "audio/mp4" }), ms);
+      else if (r.send) flash("Ghi âm quá ngắn");
+      rec.current = null;
+      setRecMs(null);
+    };
+    rec.current = r;
+    mr.start();
+    setRecMs(0);
+  }
+  function stopRec(send: boolean) {
+    const r = rec.current;
+    if (!r || r.mr.state === "inactive") return;
+    r.send = send;
+    r.mr.stop();
+  }
+  useEffect(() => {
+    if (recMs === null) return;
+    const t = setInterval(() => {
+      const ms = Date.now() - rec.current!.t0;
+      setRecMs(ms);
+      if (ms >= MAX_VOICE_MS) (flash("Đã đạt tối đa 5 phút, đang gửi"), stopRec(true));
+    }, 250);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && stopRec(false);
+    window.addEventListener("keydown", esc);
+    return () => (clearInterval(t), window.removeEventListener("keydown", esc));
+  }, [recMs === null]);
+  useEffect(() => () => stopRec(false), [thread.id]); // leaving the chat discards a recording in progress
   const [files, setFiles] = useState<File[]>([]);
   const [picker, setPicker] = useState<{ x: number; y: number } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -1271,6 +1404,7 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker }
         </button>
         <button class="icon-btn" aria-label="Gửi hình ảnh" title="Gửi hình ảnh" onClick={() => imgInput.current!.click()}><Icon name="image" size={22} /></button>
         <button class="icon-btn" aria-label="Đính kèm file" title="Đính kèm file" onClick={() => fileInput.current!.click()}><Icon name="attach" size={22} /></button>
+        <button class="icon-btn" aria-label="Ghi âm tin nhắn thoại" title="Ghi âm tin nhắn thoại" onClick={startRec} disabled={recMs !== null}><Icon name="mic" size={22} /></button>
         <input ref={imgInput} type="file" accept="image/*" multiple hidden onChange={(e) => (setFiles((f) => [...f, ...e.currentTarget.files!]), (e.currentTarget.value = ""))} />
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => (setFiles((f) => [...f, ...e.currentTarget.files!]), (e.currentTarget.value = ""))} />
       </div>
@@ -1295,7 +1429,18 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker }
           ))}
         </div>
       )}
-      <div class="input-row">
+      {recMs !== null && (
+        <div class="rec" role="status" aria-label="Đang ghi âm">
+          <button class="icon-btn" aria-label="Huỷ ghi âm" title="Huỷ (Esc)" onClick={() => stopRec(false)}><Icon name="trash" size={20} /></button>
+          <span class="rec-dot" aria-hidden="true" />
+          <span class="rec-time">{mmss(recMs)}</span>
+          <span class="rec-hint">Đang ghi âm…</span>
+          <button class="send" onClick={() => stopRec(true)} aria-label="Gửi tin nhắn thoại">
+            Gửi <Icon name="send" size={18} />
+          </button>
+        </div>
+      )}
+      <div class="input-row" hidden={recMs !== null}>
         <textarea
           ref={ta}
           rows={1}

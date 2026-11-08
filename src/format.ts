@@ -38,6 +38,9 @@ export function gapLabel(ts: number, now = Date.now()) {
   return d === "Hôm nay" ? clock(ts) : `${clock(ts)} ${d}`;
 }
 
+/** File extension for a recorded voice. Zalo's own voice files are AAC, which Apple's webview records as audio/mp4. */
+export const voiceExt = (mime: string) => (/webm/.test(mime) ? "webm" : /ogg/.test(mime) ? "ogg" : "m4a");
+
 export type Mention = { uid: string; pos: number; len: number };
 
 /** Split a message into plain and mention parts. A range that is empty, outside the text, or overlaps an earlier one is ignored. */

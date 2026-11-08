@@ -9,6 +9,7 @@ import { phoneSync } from "./transfer";
 import { openStore, type Msg, type Store, type Thread } from "./store";
 import { normalize, previewOf } from "./normalize";
 import { loginPcQr, PcQrError } from "./pclogin";
+import { fetchAudio } from "./media";
 
 const PORT = Number(process.env.ZL_PORT ?? 17789);
 const TOKEN = process.env.ZL_TOKEN ?? "";
@@ -635,6 +636,22 @@ async function handle(r: Req): Promise<unknown> {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    }
+    // A voice message is a normal file upload whose URL is then sent as a voice (verified live, docs/PROTOCOL.md).
+    case "voice": {
+      const { maxMB } = fileLimits();
+      const b64 = String(r.b64 ?? "");
+      if ((b64.length * 3) / 4 > maxMB * 1024 * 1024) throw new Error(`Tin nhắn thoại vượt quá giới hạn ${maxMB} MB`);
+      const data = Buffer.from(b64, "base64");
+      const ext = /^[a-z0-9]{2,4}$/.test(String(r.ext)) ? String(r.ext) : "m4a";
+      const [up] = (await api.uploadAttachment([{ data, filename: `voice.${ext}`, metadata: { totalSize: data.length } }], r.threadId, r.type)) as { fileUrl?: string }[];
+      if (!up?.fileUrl) throw new Error("Zalo không nhận bản ghi âm");
+      const res = await api.sendVoice({ voiceUrl: up.fileUrl }, r.threadId, r.type);
+      return { msgIds: [String(res.msgId)] };
+    }
+    case "media": {
+      const { bytes, type } = await fetchAudio(String(r.url));
+      return { b64: Buffer.from(bytes).toString("base64"), type };
     }
     case "react": {
       const m = msg(r.msgId);

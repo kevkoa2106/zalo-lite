@@ -1,6 +1,7 @@
 use std::net::TcpListener;
 use std::process::{Child, Command};
 use std::sync::Mutex;
+use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 /// The Bun backend (server/index.ts, compiled with `bun build --compile`) ships next to
@@ -41,6 +42,12 @@ pub fn run() {
                 .title("Zalo Lite")
                 .inner_size(1180.0, 760.0)
                 .min_inner_size(760.0, 520.0)
+                // The voice-message button asks for the microphone; without this rule Linux's webview denies it.
+                // The operating system still asks the user (macOS uses the Info.plist text).
+                .on_permission_request(|_, kind| match kind {
+                    PermissionKind::Microphone => PermissionResponse::Allow,
+                    _ => PermissionResponse::Default,
+                })
                 .initialization_script(&format!("window.__ZL__={{port:{port},token:\"{token}\"}};"))
                 .build()?;
             Ok(())
