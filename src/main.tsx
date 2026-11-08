@@ -848,6 +848,57 @@ function Linkified({ text, mentions }: { text: string; mentions?: Mention[] }) {
   );
 }
 
+let playing: HTMLAudioElement | null = null; // one voice message plays at a time
+const mmss = (ms: number) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+// A voice message as Zalo PC shows it: round play button, waveform that fills as it plays, and the length.
+// Zalo's params carry the audio (`m4a`, an .aac file; older messages only have an .amr `href`), `duration` in ms and a short waveform.
+function Voice({ a, flash }: { a: Record<string, any>; flash: (t: string) => void }) {
+  const p = (a.params ?? {}) as { duration?: number; m4a?: string; waveformSamples?: number[] };
+  const src = String(p.m4a || a.href || "");
+  const total = Number(p.duration) || 0;
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const [on, setOn] = useState(false);
+  const [at, setAt] = useState(0); // ms played
+  const bars = useMemo(() => {
+    const w = p.waveformSamples?.length ? p.waveformSamples : Array(24).fill(1);
+    const hi = Math.max(...w, 1);
+    return w.map((v) => Math.max(0.15, v / hi));
+  }, [a]);
+  useEffect(() => () => audio.current?.pause(), []);
+
+  function toggle() {
+    let el = audio.current;
+    if (!el) {
+      el = audio.current = new Audio(src);
+      el.ontimeupdate = () => setAt(el!.currentTime * 1000);
+      el.onplay = () => setOn(true);
+      el.onpause = () => setOn(false);
+      el.onended = () => (setOn(false), setAt(0));
+    }
+    if (!el.paused) return el.pause();
+    if (playing && playing !== el) playing.pause();
+    playing = el;
+    el.play().catch(() => flash("Không phát được tin nhắn thoại"));
+  }
+
+  const done = total ? at / total : 0;
+  return (
+    <div class="voice">
+      <button class="voice-btn" onClick={toggle} aria-label={on ? "Tạm dừng" : "Phát tin nhắn thoại"}>
+        <Icon name={on ? "pause" : "play"} size={16} />
+      </button>
+      <span class="wave" aria-hidden="true">
+        {bars.map((h, i) => <i class={i / bars.length < done ? "on" : ""} style={{ height: `${h * 100}%` }} />)}
+      </span>
+      <span class="vtime">{mmss(on || at ? at : total)}</span>
+    </div>
+  );
+}
+
 function Bubble({ m, mine, last, meId, onReply, onView, onJump, flash, onRetry, onDismiss }: {
   m: Msg; mine: boolean; last: boolean; meId: string; onReply: () => void; onView: (src: string) => void; onJump: (q: NonNullable<Msg["quote"]>) => void;
   flash: (t: string) => void; onRetry?: () => void; onDismiss?: () => void;
@@ -906,7 +957,7 @@ function Bubble({ m, mine, last, meId, onReply, onView, onJump, flash, onRetry, 
         body = <video class="vid" src={String(a.href)} poster={String(a.thumb || "")} controls preload="none" />;
         break;
       case "voice":
-        body = <><audio src={String(a.href)} controls preload="none" />{meta}</>;
+        body = <><Voice a={a} flash={flash} />{meta}</>;
         break;
       case "file": {
         const ext = String(params.fileExt || String(a.title ?? "").split(".").pop() || "file").slice(0, 4);

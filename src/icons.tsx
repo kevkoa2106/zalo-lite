@@ -85,6 +85,13 @@ const paths: Record<string, JSX.Element> = {
       <path d="m14.5 9.5 5-5" />
     </>
   ),
+  play: <path d="M8.5 5.5v13L19 12Z" stroke-linejoin="round" />,
+  pause: (
+    <>
+      <rect x="7" y="5.5" width="3.6" height="13" rx="1" />
+      <rect x="13.4" y="5.5" width="3.6" height="13" rx="1" />
+    </>
+  ),
   mic: (
     <>
       <rect x="9" y="3.5" width="6" height="11" rx="3" />
