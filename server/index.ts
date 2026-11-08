@@ -135,6 +135,11 @@ async function ready(a: API) {
     me = { id: me.id, name: profile.displayName || profile.zaloName, avatar: profile.avatar };
   } catch {}
   store = openStore(join(DATA, `${me.id}.db`));
+  // Earlier versions stored each recall notice as a message of its own and let a re-sync revive the recalled original: fix those once.
+  if (!store.get("fix:recalls")) {
+    for (const n of store.recallNotices()) (recall(String(n.target)), store.delMsg(n.id));
+    store.set("fix:recalls", "1");
+  }
   // The history is a cache of Zalo's servers, not an archive: keep the newest messages per chat and let the disk file shrink.
   const trim = () => {
     const n = store?.prune(CACHE_PER_CHAT);
@@ -186,14 +191,7 @@ async function ready(a: API) {
     store!.putMsg(target);
     broadcast({ ev: "msg", msg: target });
   });
-  l.on("undo", (u) => {
-    const target = store?.msg(String((u.data as any).content?.globalMsgId ?? ""));
-    if (!target) return;
-    target.undone = true;
-    store!.putMsg(target);
-    touchThread(target);
-    broadcast({ ev: "msg", msg: target });
-  });
+  l.on("undo", (u) => recall(String((u.data as any).content?.globalMsgId ?? "")));
   l.on("seen_messages", (ms) => broadcast({ ev: "seen", items: ms.map((m) => ({ threadId: m.threadId, data: m.data })) }));
   l.on("connected", () => console.log("realtime connected"));
   l.on("closed", (code, reason) => {
@@ -477,11 +475,25 @@ const fileLimits = () => {
   return { maxFiles: Number(s.max_file) || 10, maxMB: Math.min(Number(s.max_size_share_file_v3) || 100, 100) };
 };
 
+/** A message was recalled (by anyone). It is remembered, so a later re-sync of the original cannot bring it back. */
+function recall(id: string) {
+  if (!store || !id) return;
+  const t = store.recall(id);
+  if (!t) return;
+  touchThread(t);
+  broadcast({ ev: "msg", msg: t, thread: store.thread(t.threadId) });
+}
+
 function ingest(raw: Record<string, any>, threadId: string, type: ThreadType, live: boolean) {
   if (!store) return;
   const m = normalize(raw, threadId, type as 0 | 1, me.id);
+  // Zalo's recall notice is not a message of its own: it recalls another one (which may arrive before or after it).
+  if (raw.msgType === "chat.undo") return void recall(String(raw.content?.globalMsgId ?? ""));
+  if (store.deleted(m.id)) return; // deleted only on this side: history still has it
+  if (store.recalled(m.id)) m.undone = true;
   const prev = store.msg(m.id);
   if (prev) m.reactions = prev.reactions;
+  if (prev?.undone) m.undone = true;
   if (m.kind === "sticker") stickerImage(m);
   store.putMsg(m);
   if (m.from !== me.id && m.dName && !store.person(m.from)) store.putPerson(m.from, m.dName, "");
@@ -664,16 +676,14 @@ async function handle(r: Req): Promise<unknown> {
     case "undo": {
       const m = msg(r.msgId);
       await api.undo({ msgId: m.id, cliMsgId: m.cliMsgId }, m.threadId, m.type as ThreadType);
-      m.undone = true;
-      store.putMsg(m);
-      touchThread(m);
-      broadcast({ ev: "msg", msg: m, thread: store.thread(m.threadId) });
+      recall(m.id);
       return;
     }
     case "delete": {
       const m = msg(r.msgId);
       await api.deleteMessage({ data: { cliMsgId: m.cliMsgId, msgId: m.id, uidFrom: m.from }, threadId: m.threadId, type: m.type as ThreadType }, true);
       store.delMsg(m.id);
+      store.markDeleted(m.id);
       broadcast({ ev: "deleted", msgId: m.id, threadId: m.threadId });
       return;
     }

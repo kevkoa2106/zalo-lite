@@ -72,6 +72,26 @@ export function openStore(file: string) {
     msg: (id: string) => parse<Msg>(q.getMsg.get(id)),
     putMsg: (m: Msg) => q.putMsg.run(m.id, m.threadId, m.ts, JSON.stringify(m)),
     delMsg: (id: string) => db.run("DELETE FROM msgs WHERE id = ?", [id]),
+    // History sync re-delivers old messages as they were first sent, so a recall or a delete-for-me has to be remembered apart
+    // from the message itself, or the next sync brings the original back.
+    /** Mark a message recalled (even if it has not arrived yet). Returns the stored message when this changed it. */
+    recall: (id: string) => {
+      q.set.run(`undo:${id}`, "1");
+      const m = parse<Msg>(q.getMsg.get(id));
+      if (!m || m.undone) return null;
+      m.undone = true;
+      q.putMsg.run(m.id, m.threadId, m.ts, JSON.stringify(m));
+      return m;
+    },
+    recalled: (id: string) => !!q.get.get(`undo:${id}`),
+    markDeleted: (id: string) => q.set.run(`del:${id}`, "1"),
+    deleted: (id: string) => !!q.get.get(`del:${id}`),
+    /** Stored recall notices (Zalo's `chat.undo` messages) and the message each one recalls. */
+    recallNotices: () =>
+      db
+        .query(`SELECT id, json_extract(json, '$.attach.globalMsgId') AS target FROM msgs
+                WHERE json_extract(json, '$.undone') = 1 AND json_extract(json, '$.kind') = 'other' AND json_extract(json, '$.attach.globalMsgId') IS NOT NULL`)
+        .all() as { id: string; target: string | number }[],
     /** Newest-last page of messages older than `before`. */
     page: (thread: string, before = Number.MAX_SAFE_INTEGER, limit = 50) =>
       (q.page.all(thread, before, limit) as { json: string }[]).map((r) => JSON.parse(r.json) as Msg).reverse(),

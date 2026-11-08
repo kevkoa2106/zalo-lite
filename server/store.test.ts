@@ -36,3 +36,32 @@ test("recentOf returns newest of a kind", () => {
   s.putMsg(msg("3", "A", 3, "sticker"));
   expect(s.recentOf("sticker", 5).map((m) => m.id)).toEqual(["3", "1"]);
 });
+
+test("a recall is remembered: it applies to an original that arrives later, and to one already stored", () => {
+  const s = openStore(":memory:");
+  s.putMsg(msg("1", "A", 1));
+  expect(s.recall("1")?.undone).toBe(true); // stored message flips
+  expect(s.msg("1")!.undone).toBe(true);
+  expect(s.recall("1")).toBeNull(); // nothing changes the second time
+  expect(s.recall("2")).toBeNull(); // not stored yet: only remembered
+  expect(s.recalled("2")).toBe(true);
+  expect(s.recalled("3")).toBe(false);
+});
+
+test("a delete-for-me is remembered", () => {
+  const s = openStore(":memory:");
+  s.putMsg(msg("1", "A", 1));
+  s.delMsg("1");
+  s.markDeleted("1");
+  expect(s.msg("1")).toBeNull();
+  expect(s.deleted("1")).toBe(true);
+  expect(s.deleted("2")).toBe(false);
+});
+
+test("recallNotices finds stored recall notices and the message each recalls, not recalled media", () => {
+  const s = openStore(":memory:");
+  s.putMsg({ ...msg("n1", "A", 5, "other"), undone: true, attach: { globalMsgId: "1", cliMsgId: "9" } });
+  s.putMsg({ ...msg("v1", "A", 6, "voice"), undone: true, attach: { href: "x" } });
+  s.putMsg(msg("1", "A", 1));
+  expect(s.recallNotices()).toEqual([{ id: "n1", target: "1" }]);
+});
