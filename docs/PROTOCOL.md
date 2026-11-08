@@ -219,3 +219,26 @@ Integers are signed big-endian (`childNumber` is -1 when unused); `i64` values c
 #### AES step, verified; no native library needed (2026-11-07)
 
 On a second capture (the encrypted download saved before Zalo's library could overwrite it), the format 1 decryption was confirmed: **AES-256-CBC, no padding, key = the first 32 ASCII characters of the upper-case hex secret, zero IV restarted at the start of every 65,536-byte chunk**. The result is byte-identical to Zalo PC's output up to the hashed length; the bytes after it (a short unused tail) are not decrypted. The lower-case secret, the hex-decoded secret and a chained IV all fail the `ZDB4.0` magic check. Implemented as `decryptBackup` in `server/crossdb-native-free.ts`; `server/transfer.ts` now decodes backups with its own code (decrypt, unpack, parse) and falls back to Zalo PC's library only when the header hash or size check fails. A test runs the whole chain on a real download against the library's output. The archive's file names are checked before they touch the disk (no path separators, no leading dot).
+
+## Voice messages and voice calls: feasibility notes (2026-11-08, read-only, nothing sent to Zalo)
+
+### Receiving voice messages (done)
+- Stored voice rows (40 checked, key names only): `attach.href` plus `attach.params` with `duration` (integer, milliseconds, 1.5 s to 290 s), `m4a` (a URL ending `.aac`, present on all 40), `waveformSamples` (23 integers, 0 to about 23,000, on 28 of 40) and `fileSize` (27 of 40). Older messages have only an `.amr` `href` (13 of 40); the `.aac` copy is what the UI plays.
+- Hosts seen: `f1-voice-talk`, `f2-voice-talk`, `f2-voice-aac-dl`, `voice-aac-dl` on `zdn.vn`.
+
+### Sending voice messages (not built; two unknowns)
+- zca-js `sendVoice` posts to `/api/message/forward` (users) or `/api/group/forward` (groups) with `msgType: 3` and `msgInfo = {voiceUrl, m4aUrl, fileSize}`. It only forwards an **already hosted** URL (it does a HEAD request for the size) and has no upload step and no duration or waveform field.
+- zca-js `uploadAttachment` accepts any extension not listed in the server's `restricted_ext_file`, so an `.aac` recording uploads as an ordinary **file** message. Whether the file host's URL is accepted as a `voiceUrl`, and which endpoint Zalo PC uses to upload a real voice message, is **unknown** and needs a live experiment (a new request to Zalo).
+- Recording: macOS needs `NSMicrophoneUsageDescription`; Tauri merges a `src-tauri/Info.plist` into the bundle (Tauri docs, "Extend macOS native configuration in Info.plist"). Windows and Linux webview microphone behaviour is not verified. WebView2 and WebKitGTK usually record `audio/webm;codecs=opus`, Safari/WKWebView `audio/mp4` (AAC); Zalo's own voice files are AAC, so a Windows or Linux recording would need converting, which means a dependency.
+- Fallback with no unknowns: send the recording as a normal file attachment through the existing `files` op.
+
+### Voice calls: what Zalo PC uses (static, strings only)
+- Calls run in a separate native process: `Zalo.app/Contents/ZaloHelper.app/Contents/MacOS/ZaloCall` (35.6 MB, universal) plus the Node addon `app.asar.unpacked/native/nativelibs/zcall/zcall_mac.node` (7.4 MB, x86_64 only).
+- Both are built on WebRTC (string counts in `ZaloCall`: about 1,680 `webrtc`, 665 `rtp`, 188 `turn`, 117 `opus`, 71 `srtp`, 68 `ice_`, 68 `echo`, 34 `audio_processing`, 323 `h264`, 14 `vp8`) with Zalo's own `zrtc` layer (about 1,340 hits). No `stun:` or `turn:` literals are in the binary, so the relay servers come from signalling at call time.
+- Signalling (ring, answer, hang-up, relay credentials) travels through Zalo's servers via the main app. Its command numbers and payloads are **not documented here**, and zca-js has no call API or call events. Chat history already records finished calls (`recommened.*` actions).
+- Not done (needs you at a phone): a passive capture of unknown realtime events while the account is rung once.
+
+### Verdict (spike only; no call code written)
+- **Voice message playback:** done.
+- **Voice message recording and sending:** feasible but unverified; go only after one approved live experiment on the upload endpoint. The file-attachment fallback is safe.
+- **Voice calls:** **no-go for now.** It needs the undocumented signalling reverse-engineered from the Zalo PC bundle, plus a WebRTC stack that interoperates with Zalo's `zrtc` layer, TURN credentials, echo cancellation and microphone permissions on three operating systems. That is a project of its own, far from "lightweight", and the whole media stack would run in the user's webview on low-end machines.
