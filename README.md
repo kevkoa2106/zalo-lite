@@ -13,7 +13,7 @@ A lightweight desktop client for the messaging part of [Zalo](https://zalo.me), 
 - **Send and receive** text, photos, files, stickers (your own sticker packs plus search and a Recent tab), replies, reactions, recall, delete-for-me, typing indicators and read receipts.
 - **Call records** shown as cards: incoming, missed and declined, with durations.
 - **Older history from your phone.** Zalo keeps old 1:1 history on the phone and withholds group history from new devices, so Zalo Lite can pull a backup from the phone (you accept a prompt there) and import it. See [Phone sync](#phone-sync).
-- **A bounded cache, not an archive.** Each chat keeps its newest 3,000 messages, and nothing is stored in the repository.
+- **A bounded cache, not an archive.** Each chat keeps its newest 3,000 messages, and nothing is stored in the repository. Messages beyond the newest 200 per chat also drop Zalo's duplicate copy of themselves (about 30% smaller database on a 27,000-message account); quoting such an old message is rebuilt from the stored text.
 
 ## Architecture
 

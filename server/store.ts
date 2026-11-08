@@ -97,6 +97,21 @@ export function openStore(file: string) {
       db.run("PRAGMA wal_checkpoint(TRUNCATE)");
       return changes;
     },
+    /**
+     * Replace `raw` (a copy of Zalo's own message) with `{slim: 1}` on all but the newest `keepRaw` messages per chat. Text, ids
+     * and times stay in the message itself. Returns rows changed; the file is vacuumed after a large change so the disk space
+     * really comes back.
+     */
+    slim: (keepRaw: number) => {
+      const { changes } = db.run(
+        `UPDATE msgs SET json = json_set(json, '$.raw', json_object('slim', 1))
+         WHERE json_extract(json, '$.raw.slim') IS NULL AND rowid IN
+           (SELECT rowid FROM (SELECT rowid, ROW_NUMBER() OVER (PARTITION BY thread ORDER BY ts DESC) AS n FROM msgs) WHERE n > ?)`,
+        [keepRaw],
+      );
+      if (changes >= 500) db.run("VACUUM");
+      return changes;
+    },
     /** Run many writes as one transaction (a 60k-message import in seconds instead of minutes). */
     batch: (fn: () => void) => db.transaction(fn)(),
     close: () => db.close(),

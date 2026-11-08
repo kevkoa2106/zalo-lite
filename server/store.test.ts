@@ -12,6 +12,23 @@ test("prune keeps the newest messages of each chat", () => {
   expect(s.page("B").map((m) => m.id)).toEqual(["b4", "b5"]);
 });
 
+test("slim keeps the newest raw copies, empties older ones, and is idempotent", () => {
+  const s = openStore(":memory:");
+  const full = (id: string, ts: number, content: unknown): Msg => ({
+    ...msg(id, "A", ts), text: `t${id}`,
+    raw: { msgId: id, cliMsgId: `c${id}`, uidFrom: "u", idTo: "x", msgType: "webchat", ts: String(ts), ttl: 0, content, junk: "x".repeat(500) },
+  });
+  s.putMsg(full("1", 1, "old text"));
+  s.putMsg(full("2", 2, { title: "photo", params: "p".repeat(500) }));
+  s.putMsg(full("3", 3, "newest"));
+  expect(s.slim(1)).toBe(2);
+  expect(s.slim(1)).toBe(0);
+  expect(s.msg("3")!.raw).toHaveProperty("junk"); // newest keeps its full copy
+  expect(s.msg("1")!.raw).toEqual({ slim: 1 });
+  expect(s.msg("2")!.raw).toEqual({ slim: 1 });
+  expect(s.msg("2")!.text).toBe("t2"); // the message itself is untouched
+});
+
 test("recentOf returns newest of a kind", () => {
   const s = openStore(":memory:");
   s.putMsg(msg("1", "A", 1, "sticker"));

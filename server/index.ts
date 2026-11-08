@@ -17,6 +17,7 @@ const SESSION = join(DATA, "session.json");
 const ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "http://localhost:1420", "http://127.0.0.1:1420"]);
 mkdirSync(DATA, { recursive: true });
 const CACHE_PER_CHAT = Number(process.env.ZL_CACHE_PER_CHAT) || 3000;
+const RAW_PER_CHAT = 200; // older messages drop Zalo's full copy (store.slim): only quoting and seen receipts read it
 
 type State =
   | { state: "boot" | "logged_out" }
@@ -137,6 +138,8 @@ async function ready(a: API) {
   const trim = () => {
     const n = store?.prune(CACHE_PER_CHAT);
     if (n) console.log(`cache: dropped ${n} old messages (kept ${CACHE_PER_CHAT} per chat)`);
+    const s = store?.slim(RAW_PER_CHAT);
+    if (s) console.log(`cache: slimmed ${s} old messages (full copy kept for the newest ${RAW_PER_CHAT} per chat)`);
   };
   trim();
   setInterval(trim, 3600_000).unref();
@@ -606,7 +609,7 @@ async function handle(r: Req): Promise<unknown> {
       activeThread = "";
       return;
     case "send": {
-      const quote = r.quoteId ? msg(r.quoteId).raw : undefined;
+      const quote = r.quoteId ? quotable(msg(r.quoteId)) : undefined;
       const res = await api.sendMessage({ msg: r.text, quote: quote as any }, r.threadId, r.type);
       return echo(r, res.message?.msgId, r.text, r.quoteId);
     }
@@ -673,6 +676,12 @@ async function handle(r: Req): Promise<unknown> {
 
 // The server confirms a send with only the msgId; store a local copy so the
 // bubble shows immediately. The selfListen echo later overwrites it with full data.
+/** What sendMessage needs to quote `m`. A slimmed old message has no Zalo copy, so it is rebuilt as a text quote (not verified against Zalo). */
+function quotable(m: Msg) {
+  const raw = m.raw as Record<string, unknown>;
+  return raw.slim ? { msgId: m.id, cliMsgId: m.cliMsgId, uidFrom: m.from, msgType: "webchat", content: previewOf(m), ts: String(m.ts), ttl: 0 } : raw;
+}
+
 function echo(r: Req, msgId: number | undefined, text: string, quoteId?: string) {
   if (!msgId) return;
   const q = quoteId ? store!.msg(quoteId) : null;
