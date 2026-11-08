@@ -2,7 +2,7 @@ import { render } from "preact";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import "./styles.css";
 import { call, on, type Contact, type Limits, type Me, type Msg, type State, type Sticker, type Thread } from "./api";
-import { ago, clock, day, findQuoted, gapLabel, hue, initials, isGap, size, splitMentions, voiceExt, type Mention } from "./format";
+import { ago, builtInMic, clock, day, findQuoted, gapLabel, hue, initials, isGap, size, splitMentions, voiceExt, type Mention } from "./format";
 import { Icon, type IconName } from "./icons";
 
 // ---------- helpers ----------
@@ -879,6 +879,16 @@ async function loadVoice(src: string) {
   return new Promise<AudioBuffer>((res, rej) => audioCtx!.decodeAudioData(bytes, res, rej));
 }
 
+/** Length of a recording in seconds, or null when the webview cannot decode it (then it is not checked). */
+async function decodedSeconds(blob: Blob) {
+  try {
+    audioCtx ??= new AudioContext();
+    return (await audioCtx.decodeAudioData(await blob.arrayBuffer())).duration;
+  } catch {
+    return null;
+  }
+}
+
 /** Loudness of `n` equal slices of the clip, for the waveform of messages that carry none (ours). */
 function peaks(b: AudioBuffer, n = 24) {
   const d = b.getChannelData(0);
@@ -1299,6 +1309,13 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // A Bluetooth headset's microphone records short, garbled clips here; use the built-in one when there is one.
+      const alt = builtInMic(stream.getAudioTracks()[0]?.label ?? "", (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput"));
+      if (alt) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: alt } } });
+        flash("Đang ghi âm bằng micro của máy (micro tai nghe Bluetooth thu âm kém)");
+      }
     } catch {
       return flash("Không dùng được micro. Hãy cho phép Zalo Lite truy cập micro trong cài đặt hệ thống");
     }
@@ -1307,15 +1324,21 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
     const mr = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
     const r = { mr, stream, chunks: [] as Blob[], send: false, t0: Date.now() };
     mr.ondataavailable = (e) => e.data.size && r.chunks.push(e.data);
-    mr.onstop = () => {
+    mr.onstop = async () => {
       stream.getTracks().forEach((t) => t.stop());
-      const ms = Date.now() - r.t0;
-      const blob = new Blob(r.chunks, { type: mr.mimeType || type || "audio/mp4" });
-      if (r.send && ms < 600) flash("Ghi âm quá ngắn");
-      else if (r.send && !blob.size) flash(`Không ghi được âm thanh (${mr.mimeType || type || "không rõ định dạng"}, ${r.chunks.length} đoạn)`);
-      else if (r.send) onVoice(blob, ms);
       rec.current = null;
       setRecMs(null);
+      const ms = Date.now() - r.t0;
+      const blob = new Blob(r.chunks, { type: mr.mimeType || type || "audio/mp4" });
+      if (!r.send) return;
+      if (ms < 600) return flash("Ghi âm quá ngắn");
+      if (!blob.size) return flash(`Không ghi được âm thanh (${mr.mimeType || type || "không rõ định dạng"}, ${r.chunks.length} đoạn)`);
+      // Some microphones deliver only part of what was said; better to say so than to send a clip with silence in it.
+      const got = await decodedSeconds(blob);
+      if (got !== null && got < ms / 1000 - 1.5 && got < (ms / 1000) * 0.7) {
+        return flash(`Chỉ ghi được ${Math.round(got)} giây trong ${Math.round(ms / 1000)} giây. Micro có thể bị ngắt, hãy thử lại hoặc đổi micro`);
+      }
+      onVoice(blob, ms);
     };
     rec.current = r;
     mr.start();
