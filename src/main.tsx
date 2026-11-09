@@ -4,6 +4,7 @@ import "./styles.css";
 import { call, on, type Contact, type Limits, type Me, type Msg, type State, type Sticker, type Thread } from "./api";
 import { ago, clock, day, findQuoted, gapLabel, hue, initials, isGap, size, splitMentions, voiceExt, type Mention } from "./format";
 import { Icon, type IconName } from "./icons";
+import { GearMenu, type GearAction } from "./dialogs";
 
 // ---------- helpers ----------
 
@@ -171,7 +172,22 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
   const [typing, setTyping] = useState<Typing>({});
   const [view, setView] = useState<"chats" | "contacts">("chats");
   const [toast, setToast] = useState("");
-  const [settings, setSettings] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<DOMRect | null>(null); // the gear menu, anchored to the gear button's box
+  const [dialog, setDialog] = useState<null | "account" | { settings: string }>(null); // opened from the gear menu
+  const gear = useRef<HTMLButtonElement>(null);
+  const refocusGear = () => gear.current?.focus();
+  const pickGear = (a: GearAction) => {
+    setMenu(null);
+    if (a === "account") setDialog("account");
+    else if (a === "settings") setDialog({ settings: "general" });
+    else if (a === "data-settings") setDialog({ settings: "data" });
+    else {
+      if (a === "sync") call("phone_sync").catch((e) => flash(e.message));
+      else if (a === "logout") call("logout");
+      else openExternal("https://github.com/kevkoa2106/zalo-lite/issues");
+      refocusGear();
+    }
+  };
   const searchRef = useRef<HTMLInputElement>(null);
   const meId = me?.id ?? "";
 
@@ -301,30 +317,19 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
           <Icon name="contacts" size={26} />
         </button>
         <div class="spacer" />
-        <button class="rail-btn" aria-label="Cài đặt" aria-haspopup="menu" onClick={(e) => setSettings({ x: (e.currentTarget as HTMLElement).getBoundingClientRect().right + 6, y: innerHeight - 160 })}>
+        <button
+          ref={gear}
+          class="rail-btn"
+          aria-label="Cài đặt"
+          aria-haspopup="menu"
+          aria-expanded={!!menu}
+          onClick={() => setMenu(menu ? null : gear.current!.getBoundingClientRect())}
+        >
           <Icon name="settings" size={26} />
         </button>
       </nav>
 
-      {settings && (
-        <Popover at={settings} onClose={() => setSettings(null)} label="Cài đặt">
-          <div class="menu" role="menu">
-            {([["dark", "Giao diện tối", "moon"], ["light", "Giao diện sáng", "sun"], ["system", "Theo hệ thống", "settings"]] as const).map(([v, label, ic]) => (
-              <button role="menuitemradio" aria-checked={theme === v} onClick={() => setTheme(v)}>
-                <Icon name={ic} size={18} /> {label}
-                {theme === v && <span class="check"><Icon name="check" size={16} /></span>}
-              </button>
-            ))}
-            <hr />
-            <button role="menuitem" onClick={() => (setSettings(null), call("phone_sync").catch((e) => flash(e.message)))}>
-              <Icon name="phoneIn" size={18} /> Đồng bộ tin nhắn từ điện thoại
-            </button>
-            <button role="menuitem" class="danger" onClick={() => call("logout")}>
-              <Icon name="logout" size={18} /> Đăng xuất
-            </button>
-          </div>
-        </Popover>
-      )}
+      {menu && <GearMenu anchor={menu} gear={gear.current} onClose={(refocus) => (setMenu(null), refocus && refocusGear())} onPick={pickGear} />}
 
       <ConvList
         view={view}

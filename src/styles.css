@@ -325,6 +325,21 @@ video.vid { max-width: 360px; max-height: 360px; border-radius: 10px; background
 .menu .danger { color: var(--danger); }
 .menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
 .menu .check { margin-left: auto; color: var(--accent-text); }
+/* The gear menu (src/dialogs.tsx): opens above the gear, with flyout submenus. */
+.rail-btn[aria-expanded="true"] { background: var(--rail-selected); color: var(--rail-icon-active); }
+.gear-menu { padding: 8px; }
+.gear-menu .menu { min-width: 230px; }
+.gear-menu .menu button { padding: 10px 12px; }
+.gear-menu .noicon { padding-left: 40px; }
+.menu .chev, .menu .hint { margin-left: auto; color: var(--text-3); }
+.menu .hint { font-size: 12px; }
+.menu .check + .hint, .menu .hint + .check { margin-left: 8px; }
+.menu button:disabled { opacity: 0.55; cursor: default; }
+.menu button:disabled:hover { background: none; }
+.has-sub { position: relative; }
+.has-sub > button { width: 100%; }
+.has-sub > button[aria-expanded="true"] { background: var(--hover); }
+.gear-menu .sub { position: absolute; left: calc(100% + 6px); top: -8px; z-index: 1; display: grid; min-width: 250px; padding: 8px; }
 
 .typing { height: 22px; padding: 0 16px; font-size: 12.5px; color: var(--text-2); background: var(--chat); display: flex; align-items: center; gap: 6px; }
 .typing .dots i { display: inline-block; width: 4px; height: 4px; margin-right: 2px; border-radius: 50%; background: currentColor; animation: blink 1.2s infinite; }
