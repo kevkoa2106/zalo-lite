@@ -365,3 +365,108 @@ export function AccountCard({ onClose, returnFocus }: { onClose: () => void; ret
     </Modal>
   );
 }
+
+// ---------- settings dialog ----------
+
+export type Theme = "dark" | "light" | "system";
+export type AppSettings = { remember: boolean; cachePerChat: number };
+export type SettingsReply = { settings: AppSettings; db: { bytes: number; messages: number } };
+
+type TabId = "general" | "account" | "privacy" | "sync" | "data" | "look" | "notify" | "messages" | "calls" | "tools";
+
+// Same order and icons as Zalo PC. `ready: false` tabs show the "not supported" panel.
+const TABS: { id: TabId; label: string; icon: IconName; ready: boolean }[] = [
+  { id: "general", label: "Cài đặt chung", icon: "settings", ready: true },
+  { id: "account", label: "Tài khoản và bảo mật", icon: "shield", ready: false },
+  { id: "privacy", label: "Quyền riêng tư", icon: "lock", ready: false },
+  { id: "sync", label: "Đồng bộ và sao lưu", icon: "refresh", ready: false },
+  { id: "data", label: "Quản lý dữ liệu", icon: "database", ready: false },
+  { id: "look", label: "Giao diện", icon: "brush", ready: false },
+  { id: "notify", label: "Thông báo", icon: "bell", ready: false },
+  { id: "messages", label: "Tin nhắn", icon: "chat", ready: false },
+  { id: "calls", label: "Cài đặt cuộc gọi", icon: "phoneIn", ready: false },
+  { id: "tools", label: "Tiện ích", icon: "sliders", ready: false },
+];
+
+function Switch({ checked, onChange, disabled, label }: { checked: boolean; onChange?: (v: boolean) => void; disabled?: boolean; label: string }) {
+  return <button class="switch" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange?.(!checked)} />;
+}
+
+function Unsupported({ label }: { label: string }) {
+  return (
+    <div class="sempty">
+      <h3>{label}</h3>
+      <p>Tính năng này chưa được hỗ trợ trong Zalo Lite.</p>
+    </div>
+  );
+}
+
+function General({ s, save }: { s: SettingsReply | null; save: (p: Partial<AppSettings>) => void }) {
+  return (
+    <>
+      <h3>Ngôn ngữ</h3>
+      <div class="scard">
+        <div class="srow">
+          <span>Thay đổi ngôn ngữ</span>
+          <span class="sel">
+            <select aria-label="Thay đổi ngôn ngữ">
+              <option>Tiếng Việt</option>
+              <option disabled>English (Chưa hỗ trợ)</option>
+            </select>
+            <Icon name="down" size={16} />
+          </span>
+        </div>
+      </div>
+      <h3>Khởi động &amp; ghi nhớ tài khoản</h3>
+      <div class="scard">
+        <div class="srow">
+          <span>Khởi động Zalo khi mở máy <small class="sub-label">Chưa hỗ trợ</small></span>
+          <Switch checked={false} disabled label="Khởi động Zalo khi mở máy" />
+        </div>
+        <div class="srow">
+          <span>Ghi nhớ tài khoản đăng nhập</span>
+          <Switch checked={s?.settings.remember ?? true} disabled={!s} onChange={(v) => save({ remember: v })} label="Ghi nhớ tài khoản đăng nhập" />
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** "Cài đặt": the list of tabs on the left and the open tab on the right. */
+export function SettingsDialog({ tab: first, onClose, returnFocus, flash }: {
+  tab: string; onClose: () => void; returnFocus: () => void; flash: (t: string) => void;
+}) {
+  const [tab, setTab] = useState<TabId>(TABS.some((t) => t.id === first) ? (first as TabId) : "general");
+  const [s, setS] = useState<SettingsReply | null>(null);
+  useEffect(() => void call<SettingsReply>("settings").then(setS).catch((e) => flash(e.message)), []);
+  const save = (p: Partial<AppSettings>) =>
+    call<SettingsReply>("set_settings", { settings: p }).then(setS).catch((e) => flash(e.message));
+  const cur = TABS.find((t) => t.id === tab)!;
+
+  function key(e: KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const i = TABS.findIndex((t) => t.id === tab) + (e.key === "ArrowDown" ? 1 : -1);
+    const next = TABS[(i + TABS.length) % TABS.length]!;
+    setTab(next.id);
+    setTimeout(() => document.getElementById(`tab-${next.id}`)?.focus());
+  }
+
+  return (
+    <Modal label="Cài đặt" onClose={onClose} returnFocus={returnFocus} class="settings">
+      <nav class="snav" role="tablist" aria-orientation="vertical" aria-label="Cài đặt" onKeyDown={key}>
+        <h2>Cài đặt</h2>
+        {TABS.map((t) => (
+          <button id={`tab-${t.id}`} role="tab" aria-selected={tab === t.id} aria-controls="spane" tabIndex={tab === t.id ? 0 : -1} onClick={() => setTab(t.id)}>
+            <Icon name={t.icon} size={20} /> {t.label}
+            {!t.ready && <span class="hint">Chưa hỗ trợ</span>}
+          </button>
+        ))}
+      </nav>
+      <div id="spane" class="spane" role="tabpanel" aria-labelledby={`tab-${tab}`}>
+        <button class="icon-btn sclose" aria-label="Đóng" onClick={onClose}><Icon name="close" size={22} /></button>
+        {tab === "general" ? <General s={s} save={save} /> : <Unsupported label={cur.label} />}
+      </div>
+    </Modal>
+  );
+}
