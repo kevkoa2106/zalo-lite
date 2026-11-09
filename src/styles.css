@@ -308,6 +308,14 @@ video.vid { max-width: 360px; max-height: 360px; border-radius: 10px; background
   animation: pop 0.14s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes pop { from { opacity: 0; transform: scale(0.96); } }
+/* Dialogs (src/dialogs.tsx): a dimmed backdrop and a centred box. */
+.scrim { position: fixed; inset: 0; z-index: 35; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, 0.55); animation: fade 0.12s ease-out; }
+@keyframes fade { from { opacity: 0; } }
+.modal {
+  display: flex; flex-direction: column; max-width: 100%; max-height: 100%; overflow: hidden; outline: none;
+  background: var(--main); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+  animation: pop 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
 .emoji-row { display: flex; gap: 2px; }
 .emoji-row button { width: 36px; height: 36px; border-radius: 50%; font-size: 22px; transition: transform 0.12s, background-color 0.12s; }
 .emoji-row button:hover { background: var(--hover); transform: scale(1.15); }
