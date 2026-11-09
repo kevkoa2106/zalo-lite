@@ -135,6 +135,7 @@ export function openStore(file: string) {
     },
     /** Run many writes as one transaction (a 60k-message import in seconds instead of minutes). */
     batch: (fn: () => void) => db.transaction(fn)(),
+    count: () => (db.query("SELECT COUNT(*) AS n FROM msgs").get() as { n: number }).n,
     close: () => db.close(),
   };
 }

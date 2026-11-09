@@ -65,3 +65,11 @@ test("recallNotices finds stored recall notices and the message each recalls, no
   s.putMsg(msg("1", "A", 1));
   expect(s.recallNotices()).toEqual([{ id: "n1", target: "1" }]);
 });
+
+test("count returns the number of stored messages", () => {
+  const s = openStore(":memory:");
+  expect(s.count()).toBe(0);
+  s.putMsg(msg("1", "A", 1));
+  s.putMsg(msg("2", "B", 2));
+  expect(s.count()).toBe(2);
+});

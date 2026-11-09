@@ -1,7 +1,7 @@
 // Local backend for the Tauri UI. Talks to Zalo through zca-js (see docs/PROTOCOL.md)
 // and exposes one WebSocket on 127.0.0.1 that the UI uses for requests and live events.
 import { Zalo, ThreadType, LoginQRCallbackEventType, CloseReason, type API } from "zca-js";
-import { mkdirSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
@@ -10,6 +10,8 @@ import { openStore, type Msg, type Store, type Thread } from "./store";
 import { normalize, previewOf } from "./normalize";
 import { loginPcQr, PcQrError } from "./pclogin";
 import { fetchAudio } from "./media";
+import { loadSettings, saveSettings, sanitize } from "./settings";
+import { profileOf } from "./profile";
 
 const PORT = Number(process.env.ZL_PORT ?? 17789);
 const TOKEN = process.env.ZL_TOKEN ?? "";
@@ -17,7 +19,9 @@ const DATA = process.env.ZL_DATA ?? join(homedir(), "Library", "Application Supp
 const SESSION = join(DATA, "session.json");
 const ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "http://localhost:1420", "http://127.0.0.1:1420"]);
 mkdirSync(DATA, { recursive: true });
-const CACHE_PER_CHAT = Number(process.env.ZL_CACHE_PER_CHAT) || 3000;
+const SETTINGS = join(DATA, "settings.json");
+let settings = loadSettings(SETTINGS);
+const cacheCap = () => Number(process.env.ZL_CACHE_PER_CHAT) || settings.cachePerChat; // the environment variable still wins
 const RAW_PER_CHAT = 200; // older messages drop Zalo's full copy (store.slim): only quoting and seen receipts read it
 
 type State =
@@ -50,6 +54,7 @@ const setState = (s: State) => broadcast({ ev: "state", ...(state = s) });
 const zalo = (pc = false) => new Zalo({ selfListen: true, logging: false, checkUpdate: false, ...(pc ? { apiType: 30, apiVersion: 694 } : {}) });
 
 async function resume() {
+  if (!settings.remember) rmSync(SESSION, { force: true }); // "Ghi nhớ tài khoản" is off: the login is not kept between starts
   if (!existsSync(SESSION)) return setState({ state: "logged_out" });
   try {
     const s = await Bun.file(SESSION).json();
@@ -74,7 +79,7 @@ async function loginPc() {
       else setState({ state: "qr_expired" });
     }, ctl.signal);
     qrActions = null;
-    await Bun.write(SESSION, JSON.stringify({ cookie: s.cookie, imei: s.imei, userAgent: s.userAgent, pc: true }));
+    if (settings.remember) await Bun.write(SESSION, JSON.stringify({ cookie: s.cookie, imei: s.imei, userAgent: s.userAgent, pc: true }));
     await ready(await zalo(true).login({ cookie: s.cookie, imei: s.imei, userAgent: s.userAgent }));
   } catch (e) {
     if (ctl.signal.aborted) return; // replaced by a newer attempt
@@ -105,7 +110,7 @@ async function loginQR() {
         case LoginQRCallbackEventType.QRCodeDeclined:
           return setState({ state: "qr_expired" });
         case LoginQRCallbackEventType.GotLoginInfo:
-          await Bun.write(SESSION, JSON.stringify(ev.data));
+          if (settings.remember) await Bun.write(SESSION, JSON.stringify(ev.data));
       }
     });
     qrActions = null;
@@ -127,26 +132,31 @@ async function logout() {
 
 // ---------- sync ----------
 
+let accountInfo: Record<string, any> | null = null; // zca-js fetchAccountInfo().profile, read once at login
+const DB = () => join(DATA, `${me.id}.db`);
+
+// The history is a cache of Zalo's servers, not an archive: keep the newest messages per chat and let the disk file shrink.
+function trim() {
+  const n = store?.prune(cacheCap());
+  if (n) console.log(`cache: dropped ${n} old messages (kept ${cacheCap()} per chat)`);
+  const s = store?.slim(RAW_PER_CHAT);
+  if (s) console.log(`cache: slimmed ${s} old messages (full copy kept for the newest ${RAW_PER_CHAT} per chat)`);
+}
+
 async function ready(a: API) {
   api = a;
   me.id = a.getOwnId();
   try {
     const { profile } = await a.fetchAccountInfo();
+    accountInfo = profile as unknown as Record<string, any>;
     me = { id: me.id, name: profile.displayName || profile.zaloName, avatar: profile.avatar };
   } catch {}
-  store = openStore(join(DATA, `${me.id}.db`));
+  store = openStore(DB());
   // Earlier versions stored each recall notice as a message of its own and let a re-sync revive the recalled original: fix those once.
   if (!store.get("fix:recalls")) {
     for (const n of store.recallNotices()) (recall(String(n.target)), store.delMsg(n.id));
     store.set("fix:recalls", "1");
   }
-  // The history is a cache of Zalo's servers, not an archive: keep the newest messages per chat and let the disk file shrink.
-  const trim = () => {
-    const n = store?.prune(CACHE_PER_CHAT);
-    if (n) console.log(`cache: dropped ${n} old messages (kept ${CACHE_PER_CHAT} per chat)`);
-    const s = store?.slim(RAW_PER_CHAT);
-    if (s) console.log(`cache: slimmed ${s} old messages (full copy kept for the newest ${RAW_PER_CHAT} per chat)`);
-  };
   trim();
   setInterval(trim, 3600_000).unref();
   store.putPerson(me.id, me.name, me.avatar);
@@ -475,6 +485,15 @@ const fileLimits = () => {
   return { maxFiles: Number(s.max_file) || 10, maxMB: Math.min(Number(s.max_size_share_file_v3) || 100, 100) };
 };
 
+/** Settings plus the size of the message database, for the "Quản lý dữ liệu" tab. */
+function settingsReply() {
+  let bytes = 0;
+  try {
+    bytes = statSync(DB()).size;
+  } catch {}
+  return { settings, db: { bytes, messages: store?.count() ?? 0 } };
+}
+
 /** A message was recalled (by anyone). It is remembered, so a later re-sync of the original cannot bring it back. */
 function recall(id: string) {
   if (!store || !id) return;
@@ -558,6 +577,16 @@ async function handle(r: Req): Promise<unknown> {
   switch (r.op) {
     case "bootstrap":
       return { threads: threadList(), contacts: contacts(), limits: fileLimits() };
+    case "profile":
+      if (!accountInfo) throw new Error("Chưa tải được thông tin tài khoản");
+      return profileOf(accountInfo, me.id);
+    case "settings":
+      return settingsReply();
+    case "set_settings":
+      settings = sanitize(r.settings, settings);
+      saveSettings(SETTINGS, settings);
+      trim(); // a smaller cap takes effect now, not at the next hourly pass
+      return settingsReply();
     case "stickers": {
       const q = String(r.q ?? "").trim();
       if (!q) return recentStickers();
@@ -572,7 +601,7 @@ async function handle(r: Req): Promise<unknown> {
     case "phone_sync": {
       // Runs in the background; progress arrives as "notice" events. The request is accepted on the phone.
       phoneSync({
-        api, ownId: me.id, cacheDir: join(DATA, "cache", "transfer"), keep: CACHE_PER_CHAT,
+        api, ownId: me.id, cacheDir: join(DATA, "cache", "transfer"), keep: cacheCap(),
         notify: (text) => broadcast({ ev: "notice", text }),
         ingest: (raw, threadId, type) => ingest(raw, threadId, type, false),
         batch: (fn) => store!.batch(fn),
