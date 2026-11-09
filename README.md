@@ -13,6 +13,7 @@ A lightweight desktop client for the messaging part of [Zalo](https://zalo.me), 
 - **Send and receive** text, photos, files, stickers (your own sticker packs plus search and a Recent tab), replies, reactions, recall, delete-for-me, typing indicators and read receipts.
 - **Voice messages:** play them in a waveform bubble and record and send your own with the mic button (up to 5 minutes). Zalo deletes old voice files from its servers, so older ones show "Đã hết hạn".
 - **Mentions and replies:** `@name` is blue, and clicking the quote above a reply scrolls to the original message.
+- **Gear menu, account card and settings.** The gear button opens Zalo PC's menu: Thông tin tài khoản (banner, avatar, name, birth date, phone; you can change the name, gender, birth date and avatar, each after one confirmation), Cài đặt (language, remember login, theme, phone sync, data size and the number of messages kept per chat, how Enter sends), Dữ liệu, Ngôn ngữ, Hỗ trợ and Đăng xuất. Settings are saved in `settings.json` in the data folder.
 - **Call records** shown as cards: incoming, missed and declined, with durations.
 - **Older history from your phone.** Zalo keeps old 1:1 history on the phone and withholds group history from new devices, so Zalo Lite can pull a backup from the phone (you accept a prompt there) and import it. See [Phone sync](#phone-sync).
 - **A bounded cache, not an archive.** Each chat keeps its newest 3,000 messages, and nothing is stored in the repository. Messages beyond the newest 200 per chat also drop Zalo's duplicate copy of themselves (about 30% smaller database on a 27,000-message account); quoting such an old message is rebuilt from the stored text.
@@ -66,7 +67,7 @@ All optional, set as environment variables.
 | `ZL_TOKEN` | empty | Token the window must present |
 | `ZL_DATA` | `~/Library/Application Support/zalo-lite` | Where the session and message cache live |
 | `ZL_LOGIN` | PC QR | Set to `web` to force the web-style QR login |
-| `ZL_CACHE_PER_CHAT` | `3000` | Newest messages kept per conversation |
+| `ZL_CACHE_PER_CHAT` | `3000` | Newest messages kept per conversation (wins over the setting in Cài đặt > Quản lý dữ liệu) |
 
 ## Project layout
 
@@ -92,6 +93,11 @@ All optional, set as environment variables.
   - Allow the microphone when macOS asks; if it was denied, turn it on in System Settings, Privacy & Security, Microphone.
 - **Mentions are display-only.** `@name` shows in blue, but you cannot yet pick someone with `@` while typing. Messages imported from the phone carry no mentions and no reply targets, so their quotes are not clickable.
 - **Old messages are slimmed.** Beyond the newest 200 messages per chat, the app drops Zalo's duplicate copy of each message to save disk space. Replying to such an old message is rebuilt from its stored text and has not been tried against Zalo.
+- **Account and settings.**
+  - Changing the name, gender, birth date or avatar writes to your real Zalo account. The app validates the input and asks for one confirmation, but these calls have only been tested against a mock, never on a live account, and Zalo may limit how often some fields can change. Its error is shown as it is.
+  - The banner is shown but cannot be changed: zca-js has no call for it. The phone number is display-only.
+  - Not supported yet, and marked "Chưa hỗ trợ": English, start at login, notifications, privacy settings, call settings, utilities, and a "Thoát" menu item. The first three need extra Tauri plugins; use the phone app for privacy settings.
+  - "Ghi nhớ tài khoản đăng nhập" off means the saved login is deleted at the next start and you scan the QR code again. Lowering the number of messages kept per chat deletes the older ones from this computer at once (not from Zalo or your phone).
 - **Not implemented yet:** forwarding, labels (Phân loại), video and voice calls, files over 100 MB, searching message text (the search box only filters the conversation list).
 - **macOS first.** Linux and Windows builds are released from CI, but only macOS has been run by hand. Phone sync, microphone access and audio playback are untested there.
 
