@@ -4,7 +4,7 @@ import "./styles.css";
 import { call, on, type Contact, type Limits, type Me, type Msg, type State, type Sticker, type Thread } from "./api";
 import { ago, clock, day, findQuoted, gapLabel, hue, initials, isGap, size, splitMentions, voiceExt, type Mention } from "./format";
 import { Icon, type IconName } from "./icons";
-import { AccountCard, GearMenu, SettingsDialog, type GearAction } from "./dialogs";
+import { AccountCard, GearMenu, SettingsDialog, sendsWithMod, type GearAction } from "./dialogs";
 
 // ---------- helpers ----------
 
@@ -331,7 +331,7 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
 
       {menu && <GearMenu anchor={menu} gear={gear.current} onClose={(refocus) => (setMenu(null), refocus && refocusGear())} onPick={pickGear} />}
       {dialog === "account" && <AccountCard onClose={() => setDialog(null)} returnFocus={refocusGear} />}
-      {dialog && dialog !== "account" && <SettingsDialog tab={dialog.settings} onClose={() => setDialog(null)} returnFocus={refocusGear} flash={flash} />}
+      {dialog && dialog !== "account" && <SettingsDialog tab={dialog.settings} onClose={() => setDialog(null)} returnFocus={refocusGear} flash={flash} theme={theme} setTheme={setTheme} />}
 
       <ConvList
         view={view}
@@ -1482,7 +1482,8 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
             }
           }}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+            // Settings > Tin nhắn: Enter sends (Shift + Enter breaks the line), or Ctrl/Cmd + Enter sends (Enter breaks the line).
+            if (e.key === "Enter" && !e.isComposing && (sendsWithMod() ? e.metaKey || e.ctrlKey : !e.shiftKey)) {
               e.preventDefault();
               submit();
             }

@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import { call } from "./api";
-import { dobLabel, hue, initials } from "./format";
+import { dobLabel, hue, initials, size } from "./format";
 import { Icon, type IconName } from "./icons";
 
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -377,13 +377,13 @@ type TabId = "general" | "account" | "privacy" | "sync" | "data" | "look" | "not
 // Same order and icons as Zalo PC. `ready: false` tabs show the "not supported" panel.
 const TABS: { id: TabId; label: string; icon: IconName; ready: boolean }[] = [
   { id: "general", label: "Cài đặt chung", icon: "settings", ready: true },
-  { id: "account", label: "Tài khoản và bảo mật", icon: "shield", ready: false },
+  { id: "account", label: "Tài khoản và bảo mật", icon: "shield", ready: true },
   { id: "privacy", label: "Quyền riêng tư", icon: "lock", ready: false },
-  { id: "sync", label: "Đồng bộ và sao lưu", icon: "refresh", ready: false },
-  { id: "data", label: "Quản lý dữ liệu", icon: "database", ready: false },
-  { id: "look", label: "Giao diện", icon: "brush", ready: false },
+  { id: "sync", label: "Đồng bộ và sao lưu", icon: "refresh", ready: true },
+  { id: "data", label: "Quản lý dữ liệu", icon: "database", ready: true },
+  { id: "look", label: "Giao diện", icon: "brush", ready: true },
   { id: "notify", label: "Thông báo", icon: "bell", ready: false },
-  { id: "messages", label: "Tin nhắn", icon: "chat", ready: false },
+  { id: "messages", label: "Tin nhắn", icon: "chat", ready: true },
   { id: "calls", label: "Cài đặt cuộc gọi", icon: "phoneIn", ready: false },
   { id: "tools", label: "Tiện ích", icon: "sliders", ready: false },
 ];
@@ -392,11 +392,11 @@ function Switch({ checked, onChange, disabled, label }: { checked: boolean; onCh
   return <button class="switch" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange?.(!checked)} />;
 }
 
-function Unsupported({ label }: { label: string }) {
+function Unsupported({ label, note }: { label: string; note?: string }) {
   return (
     <div class="sempty">
       <h3>{label}</h3>
-      <p>Tính năng này chưa được hỗ trợ trong Zalo Lite.</p>
+      <p>Tính năng này chưa được hỗ trợ trong Zalo Lite. {note}</p>
     </div>
   );
 }
@@ -433,8 +433,8 @@ function General({ s, save }: { s: SettingsReply | null; save: (p: Partial<AppSe
 }
 
 /** "Cài đặt": the list of tabs on the left and the open tab on the right. */
-export function SettingsDialog({ tab: first, onClose, returnFocus, flash }: {
-  tab: string; onClose: () => void; returnFocus: () => void; flash: (t: string) => void;
+export function SettingsDialog({ tab: first, onClose, returnFocus, flash, theme, setTheme }: {
+  tab: string; onClose: () => void; returnFocus: () => void; flash: (t: string) => void; theme: Theme; setTheme: (t: Theme) => void;
 }) {
   const [tab, setTab] = useState<TabId>(TABS.some((t) => t.id === first) ? (first as TabId) : "general");
   const [s, setS] = useState<SettingsReply | null>(null);
@@ -465,8 +465,123 @@ export function SettingsDialog({ tab: first, onClose, returnFocus, flash }: {
       </nav>
       <div id="spane" class="spane" role="tabpanel" aria-labelledby={`tab-${tab}`}>
         <button class="icon-btn sclose" aria-label="Đóng" onClick={onClose}><Icon name="close" size={22} /></button>
-        {tab === "general" ? <General s={s} save={save} /> : <Unsupported label={cur.label} />}
+        {tab === "general" ? <General s={s} save={save} />
+          : tab === "account" ? <AccountTab />
+          : tab === "sync" ? <Sync flash={flash} />
+          : tab === "data" ? <DataTab s={s} save={save} />
+          : tab === "look" ? <Look theme={theme} setTheme={setTheme} />
+          : tab === "messages" ? <Messages />
+          : <Unsupported label={cur.label} note={tab === "privacy" ? "Hãy đổi quyền riêng tư trong ứng dụng Zalo trên điện thoại." : undefined} />}
       </div>
     </Modal>
+  );
+}
+
+// ---------- settings tabs ----------
+
+const SEND_KEY = "sendKey"; // "enter" (default) or "mod": the composer reads it on every Enter
+
+/** True when messages are sent with Ctrl or Cmd + Enter and Enter alone starts a new line. */
+export function sendsWithMod() {
+  try {
+    return localStorage.getItem(SEND_KEY) === "mod";
+  } catch {
+    return false;
+  }
+}
+
+function Choice({ checked, onPick, children }: { checked: boolean; onPick: () => void; children: ComponentChildren }) {
+  return (
+    <button class="choice" role="radio" aria-checked={checked} onClick={onPick}>
+      <span>{children}</span>
+      {checked && <span class="check"><Icon name="check" size={18} /></span>}
+    </button>
+  );
+}
+
+function Look({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void }) {
+  return (
+    <>
+      <h3>Giao diện</h3>
+      <div class="scard" role="radiogroup" aria-label="Giao diện">
+        {([["dark", "Tối"], ["light", "Sáng"], ["system", "Theo hệ thống"]] as const).map(([v, label]) => (
+          <Choice checked={theme === v} onPick={() => setTheme(v)}>{label}</Choice>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function Sync({ flash }: { flash: (t: string) => void }) {
+  return (
+    <>
+      <h3>Đồng bộ và sao lưu</h3>
+      <div class="scard">
+        <div class="srow">
+          <span>
+            Đồng bộ tin nhắn từ điện thoại
+            <small class="sdesc">Điện thoại sẽ hỏi bạn có đồng ý không. Tin nhắn cũ của bạn bè chỉ có trên điện thoại.</small>
+          </span>
+          <button class="primary" onClick={() => call("phone_sync").catch((e) => flash(e.message))}>Đồng bộ</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function DataTab({ s, save }: { s: SettingsReply | null; save: (p: Partial<AppSettings>) => void }) {
+  return (
+    <>
+      <h3>Quản lý dữ liệu</h3>
+      <div class="scard">
+        <div class="srow"><span>Dung lượng tin nhắn trên máy</span><strong>{s ? size(s.db.bytes) : "…"}</strong></div>
+        <div class="srow"><span>Số tin nhắn đã lưu</span><strong>{s ? s.db.messages.toLocaleString("vi-VN") : "…"}</strong></div>
+        <div class="srow">
+          <span>
+            Số tin nhắn giữ lại mỗi cuộc trò chuyện
+            <small class="sdesc">Giảm số này sẽ xoá ngay các tin nhắn cũ hơn khỏi máy này. Tin nhắn trên Zalo và điện thoại không bị ảnh hưởng.</small>
+          </span>
+          <span class="sel">
+            <select aria-label="Số tin nhắn giữ lại mỗi cuộc trò chuyện" disabled={!s} value={s?.settings.cachePerChat} onChange={(e) => save({ cachePerChat: Number(e.currentTarget.value) })}>
+              {[1000, 3000, 5000].map((n) => <option value={n}>{n.toLocaleString("vi-VN")}</option>)}
+            </select>
+            <Icon name="down" size={16} />
+          </span>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Messages() {
+  const [mod, setMod] = useState(sendsWithMod());
+  const pick = (v: boolean) => {
+    setMod(v);
+    try {
+      localStorage.setItem(SEND_KEY, v ? "mod" : "enter");
+    } catch {}
+  };
+  return (
+    <>
+      <h3>Tin nhắn</h3>
+      <div class="scard" role="radiogroup" aria-label="Gửi tin nhắn bằng">
+        <Choice checked={!mod} onPick={() => pick(false)}>Enter để gửi, Shift + Enter để xuống dòng</Choice>
+        <Choice checked={mod} onPick={() => pick(true)}>Ctrl hoặc ⌘ + Enter để gửi, Enter để xuống dòng</Choice>
+      </div>
+    </>
+  );
+}
+
+function AccountTab() {
+  const [phone, setPhone] = useState<string | null>(null);
+  useEffect(() => void call<Profile>("profile").then((p) => setPhone(p.phone)).catch(() => setPhone("")), []);
+  return (
+    <>
+      <h3>Tài khoản và bảo mật</h3>
+      <div class="scard">
+        <div class="srow"><span>Số điện thoại</span><strong>{phone === null ? "…" : phone || "Chưa có"}</strong></div>
+      </div>
+      <p class="sdesc">Đổi mật khẩu và các cài đặt bảo mật khác hãy dùng ứng dụng Zalo trên điện thoại.</p>
+    </>
   );
 }
