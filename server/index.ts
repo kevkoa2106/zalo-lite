@@ -1,6 +1,6 @@
 // Local backend for the Tauri UI. Talks to Zalo through zca-js (see docs/PROTOCOL.md)
 // and exposes one WebSocket on 127.0.0.1 that the UI uses for requests and live events.
-import { Zalo, ThreadType, LoginQRCallbackEventType, CloseReason, type API } from "zca-js";
+import { Zalo, ThreadType, LoginQRCallbackEventType, CloseReason, type API, type Gender } from "zca-js";
 import { mkdirSync, existsSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -11,7 +11,7 @@ import { normalize, previewOf } from "./normalize";
 import { loginPcQr, PcQrError } from "./pclogin";
 import { fetchAudio } from "./media";
 import { loadSettings, saveSettings, sanitize } from "./settings";
-import { profileOf } from "./profile";
+import { profileOf, validateAvatar, validateProfile } from "./profile";
 
 const PORT = Number(process.env.ZL_PORT ?? 17789);
 const TOKEN = process.env.ZL_TOKEN ?? "";
@@ -485,6 +485,15 @@ const fileLimits = () => {
   return { maxFiles: Number(s.max_file) || 10, maxMB: Math.min(Number(s.max_size_share_file_v3) || 100, 100) };
 };
 
+/** Read the account again after a change and tell the UI (the rail shows the avatar and the name). */
+async function refreshAccount() {
+  const { profile } = await api!.fetchAccountInfo();
+  accountInfo = profile as unknown as Record<string, any>;
+  me = { id: me.id, name: profile.displayName || profile.zaloName, avatar: profile.avatar };
+  store?.putPerson(me.id, me.name, me.avatar);
+  setState({ state: "ready", me });
+}
+
 /** Settings plus the size of the message database, for the "Quản lý dữ liệu" tab. */
 function settingsReply() {
   let bytes = 0;
@@ -580,6 +589,19 @@ async function handle(r: Req): Promise<unknown> {
     case "profile":
       if (!accountInfo) throw new Error("Chưa tải được thông tin tài khoản");
       return profileOf(accountInfo, me.id);
+    // These two change the real Zalo account; the UI asks for a confirmation first and Zalo's own error is passed on as it is.
+    case "profile_update": {
+      const v = validateProfile(r);
+      await api.updateProfile({ profile: { name: v.name, dob: v.dob as `${string}-${string}-${string}`, gender: v.gender as unknown as Gender } });
+      await refreshAccount();
+      return profileOf(accountInfo!, me.id);
+    }
+    case "avatar": {
+      const a = validateAvatar(r);
+      await api.changeAccountAvatar({ data: a.data, filename: "avatar.jpg", metadata: { totalSize: a.data.length, width: a.width, height: a.height } });
+      await refreshAccount();
+      return profileOf(accountInfo!, me.id);
+    }
     case "settings":
       return settingsReply();
     case "set_settings":

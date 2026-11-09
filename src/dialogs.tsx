@@ -179,15 +179,94 @@ function Head({ title, onClose }: { title: string; onClose: () => void }) {
   );
 }
 
-/** "Thông tin tài khoản": the banner, the avatar, the name and the personal details of the signed-in account. */
+/** A picked image as a centred square JPEG of at most 640 px: what the avatar upload takes. */
+async function cropSquare(file: File, max = 640) {
+  const bmp = await createImageBitmap(file);
+  const side = Math.min(bmp.width, bmp.height);
+  const out = Math.min(side, max);
+  const c = document.createElement("canvas");
+  c.width = c.height = out;
+  c.getContext("2d")!.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, out, out);
+  bmp.close();
+  const blob = await new Promise<Blob | null>((res) => c.toBlob(res, "image/jpeg", 0.9));
+  if (!blob) throw new Error("Không đọc được ảnh");
+  return { blob, width: out, height: out };
+}
+
+async function toB64(blob: Blob) {
+  const u = new Uint8Array(await blob.arrayBuffer());
+  let s = "";
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+type Pending = { kind: "profile"; name: string; gender: 0 | 1; dob: string } | { kind: "avatar"; url: string; blob: Blob; width: number; height: number };
+
+/**
+ * "Thông tin tài khoản": the banner, the avatar, the name and the personal details of the signed-in account.
+ * Changing the name, gender, birth date or avatar changes the real Zalo account, so each change shows a summary and
+ * asks for one confirmation first. The banner can only be shown: zca-js has no call to change it.
+ */
 export function AccountCard({ onClose, returnFocus }: { onClose: () => void; returnFocus: () => void }) {
   const [p, setP] = useState<Profile | null>(null);
   const [err, setErr] = useState("");
+  const [mode, setMode] = useState<"view" | "edit" | "confirm">("view");
+  const [form, setForm] = useState({ name: "", gender: 0 as 0 | 1, dob: "" });
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [formErr, setFormErr] = useState("");
+  const file = useRef<HTMLInputElement>(null);
   const load = () => {
     setErr("");
     call<Profile>("profile").then(setP).catch((e) => setErr(e.message));
   };
   useEffect(load, []);
+  useEffect(() => () => pending?.kind === "avatar" && URL.revokeObjectURL(pending.url), [pending]);
+
+  const edit = () => {
+    setForm({ name: p!.name, gender: p!.gender, dob: p!.dob });
+    setFormErr("");
+    setMode("edit");
+  };
+  function review(e: Event) {
+    e.preventDefault();
+    const name = form.name.trim();
+    if (!name) return setFormErr("Tên hiển thị không được để trống");
+    if (!form.dob) return setFormErr("Hãy chọn ngày sinh");
+    setPending({ kind: "profile", name, gender: form.gender, dob: form.dob });
+    setFormErr("");
+    setMode("confirm");
+  }
+  async function pickAvatar(f: File) {
+    try {
+      const c = await cropSquare(f);
+      setPending({ kind: "avatar", url: URL.createObjectURL(c.blob), ...c });
+      setFormErr("");
+      setMode("confirm");
+    } catch {
+      setFormErr("Không đọc được ảnh này, hãy chọn ảnh khác");
+    }
+  }
+  async function apply() {
+    if (!pending) return;
+    setBusy(true);
+    setFormErr("");
+    try {
+      const r =
+        pending.kind === "profile"
+          ? await call<Profile>("profile_update", { name: pending.name, gender: pending.gender, dob: pending.dob })
+          : await call<Profile>("avatar", { b64: await toB64(pending.blob), width: pending.width, height: pending.height });
+      setP(r);
+      setPending(null);
+      setMode("view");
+    } catch (e: any) {
+      setFormErr(e.message);
+      setMode(pending.kind === "profile" ? "edit" : "view");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Modal label="Thông tin tài khoản" onClose={onClose} returnFocus={returnFocus} class="account">
       <Head title="Thông tin tài khoản" onClose={onClose} />
@@ -204,28 +283,83 @@ export function AccountCard({ onClose, returnFocus }: { onClose: () => void; ret
           <div class="who">
             <div class="avwrap">
               <Pic src={p.avatar} name={p.name} id={p.id} size={80} />
-              <button class="cam" aria-label="Đổi ảnh đại diện" disabled><Icon name="camera" size={16} /></button>
+              <button class="cam" aria-label="Đổi ảnh đại diện" onClick={() => file.current!.click()} disabled={busy || mode === "confirm"}><Icon name="camera" size={16} /></button>
+              <input ref={file} type="file" accept="image/*" hidden onChange={(e) => { const f = e.currentTarget.files?.[0]; e.currentTarget.value = ""; if (f) pickAvatar(f); }} />
             </div>
             <div class="nm">
               <strong>{p.name}</strong>
-              <button class="icon-btn" aria-label="Đổi tên hiển thị" disabled><Icon name="pencil" size={16} /></button>
+              <button class="icon-btn" aria-label="Đổi tên hiển thị" onClick={edit} disabled={busy || mode !== "view"}><Icon name="pencil" size={16} /></button>
             </div>
           </div>
-          <section class="info">
-            <h3>Thông tin cá nhân</h3>
-            <dl>
-              <dt>Giới tính</dt>
-              <dd>{p.gender === 1 ? "Nữ" : "Nam"}</dd>
-              <dt>Ngày sinh</dt>
-              <dd>{dobLabel(p.dob) || "Chưa cập nhật"}</dd>
-              <dt>Điện thoại</dt>
-              <dd>{p.phone || "Chưa có"}</dd>
-            </dl>
-            <p class="note">Chỉ bạn bè có lưu số của bạn trong danh bạ máy xem được số này</p>
-          </section>
-          <footer class="mfoot">
-            <button class="update" disabled><Icon name="pencil" size={18} /> Cập nhật</button>
-          </footer>
+
+          {mode === "view" && (
+            <>
+              <section class="info">
+                <h3>Thông tin cá nhân</h3>
+                <dl>
+                  <dt>Giới tính</dt>
+                  <dd>{p.gender === 1 ? "Nữ" : "Nam"}</dd>
+                  <dt>Ngày sinh</dt>
+                  <dd>{dobLabel(p.dob) || "Chưa cập nhật"}</dd>
+                  <dt>Điện thoại</dt>
+                  <dd>{p.phone || "Chưa có"}</dd>
+                </dl>
+                <p class="note">Chỉ bạn bè có lưu số của bạn trong danh bạ máy xem được số này</p>
+                {formErr && <p class="ferr" role="alert">{formErr}</p>}
+              </section>
+              <footer class="mfoot">
+                <button class="update" onClick={edit}><Icon name="pencil" size={18} /> Cập nhật</button>
+              </footer>
+            </>
+          )}
+
+          {mode === "edit" && (
+            <form class="info eform" onSubmit={review}>
+              <h3>Cập nhật thông tin</h3>
+              <label>
+                <span>Tên hiển thị</span>
+                <input value={form.name} maxLength={64} onInput={(e) => setForm({ ...form, name: e.currentTarget.value })} />
+              </label>
+              <fieldset>
+                <legend>Giới tính</legend>
+                <label class="radio"><input type="radio" name="gender" checked={form.gender === 0} onChange={() => setForm({ ...form, gender: 0 })} /> Nam</label>
+                <label class="radio"><input type="radio" name="gender" checked={form.gender === 1} onChange={() => setForm({ ...form, gender: 1 })} /> Nữ</label>
+              </fieldset>
+              <label>
+                <span>Ngày sinh</span>
+                <input type="date" value={form.dob} max={new Date().toISOString().slice(0, 10)} onInput={(e) => setForm({ ...form, dob: e.currentTarget.value })} />
+              </label>
+              {formErr && <p class="ferr" role="alert">{formErr}</p>}
+              <div class="fbtns">
+                <button type="button" class="ghost" onClick={() => setMode("view")}>Huỷ</button>
+                <button type="submit" class="primary">Tiếp tục</button>
+              </div>
+            </form>
+          )}
+
+          {mode === "confirm" && pending && (
+            <section class="info confirm">
+              <h3>Xác nhận thay đổi</h3>
+              <p>Thay đổi này sẽ cập nhật tài khoản Zalo thật của bạn.</p>
+              {pending.kind === "avatar" ? (
+                <img class="avprev" src={pending.url} alt="Ảnh đại diện mới" width={96} height={96} />
+              ) : (
+                <dl>
+                  <dt>Tên hiển thị</dt>
+                  <dd>{pending.name}</dd>
+                  <dt>Giới tính</dt>
+                  <dd>{pending.gender === 1 ? "Nữ" : "Nam"}</dd>
+                  <dt>Ngày sinh</dt>
+                  <dd>{dobLabel(pending.dob)}</dd>
+                </dl>
+              )}
+              {formErr && <p class="ferr" role="alert">{formErr}</p>}
+              <div class="fbtns">
+                <button class="ghost" onClick={() => (setPending(null), setMode(pending.kind === "profile" ? "edit" : "view"))} disabled={busy}>Quay lại</button>
+                <button class="primary" onClick={apply} disabled={busy}>{busy ? "Đang cập nhật…" : "Xác nhận"}</button>
+              </div>
+            </section>
+          )}
         </>
       )}
     </Modal>

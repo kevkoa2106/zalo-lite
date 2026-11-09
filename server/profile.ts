@@ -32,3 +32,39 @@ export function profileOf(p: Record<string, any>, id: string): Profile {
     phone: String(p.phoneNumber ?? ""),
   };
 }
+
+export type ProfileEdit = { name: string; gender: 0 | 1; dob: string };
+
+/**
+ * Check a profile change before it goes to Zalo: this is the real account, so bad input must not reach it.
+ * ponytail: the 64-character cap is a sanity limit; Zalo's own rules decide the rest and its error is shown as it is.
+ */
+export function validateProfile(r: Record<string, unknown>, now = Date.now()): ProfileEdit {
+  const name = String(r.name ?? "").trim().replace(/\s+/g, " ");
+  if (!name) throw new Error("Tên hiển thị không được để trống");
+  if (name.length > 64 || /[\u0000-\u001f\u007f]/.test(name)) throw new Error("Tên hiển thị không hợp lệ");
+  if (r.gender !== 0 && r.gender !== 1) throw new Error("Giới tính không hợp lệ");
+  const dob = String(r.dob ?? "");
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dob);
+  const [y, mo, d] = m ? [+m[1]!, +m[2]!, +m[3]!] : [0, 0, 0];
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  if (!m || y < 1900 || t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d || t.getTime() > now) throw new Error("Ngày sinh không hợp lệ");
+  return { name, gender: r.gender, dob };
+}
+
+export type AvatarUpload = { data: Buffer; width: number; height: number };
+const MAX_AVATAR = 5 * 1024 * 1024;
+
+/** The avatar the UI sends: a JPEG (zca-js uploads it as one) of at most 5 MB with sane dimensions. */
+export function validateAvatar(r: Record<string, unknown>): AvatarUpload {
+  const b64 = String(r.b64 ?? "");
+  if ((b64.length * 3) / 4 > MAX_AVATAR) throw new Error("Ảnh quá lớn (tối đa 5 MB)");
+  const data = Buffer.from(b64, "base64");
+  if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8 || data[2] !== 0xff) throw new Error("Ảnh đại diện phải là JPEG");
+  const side = (v: unknown) => {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 64 || n > 4096) throw new Error("Kích thước ảnh không hợp lệ");
+    return n;
+  };
+  return { data, width: side(r.width), height: side(r.height) };
+}

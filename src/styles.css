@@ -434,3 +434,22 @@ video.vid { max-width: 360px; max-height: 360px; border-radius: 10px; background
 .update:disabled { opacity: 0.5; cursor: default; }
 .mempty { padding: 40px 20px; text-align: center; color: var(--text-2); }
 .mempty p { margin: 0 0 12px; }
+.eform { display: grid; gap: 14px; }
+.eform h3, .confirm h3 { margin: 0; }
+.eform label { display: grid; gap: 6px; }
+.eform label span, .eform legend { color: var(--text-2); font-size: 13px; }
+.eform input:not([type="radio"]) { padding: 9px 12px; border-radius: 6px; background: var(--field); border: 1px solid var(--border); color: var(--text); }
+.eform input:not([type="radio"]):focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.eform fieldset { border: 0; padding: 0; margin: 0; display: flex; gap: 20px; flex-wrap: wrap; }
+.eform legend { padding: 0; margin-bottom: 6px; width: 100%; }
+.eform .radio { display: flex; align-items: center; gap: 8px; }
+.confirm p { margin: 8px 0 14px; color: var(--text-2); }
+.confirm dl { margin-bottom: 4px; }
+.avprev { display: block; width: 96px; height: 96px; border-radius: 50%; object-fit: cover; border: 3px solid var(--border-strong); }
+.fbtns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+.ferr { margin: 10px 0 0; color: var(--danger); font-size: 13.5px; }
+.primary, .ghost { padding: 9px 18px; border-radius: 6px; font-weight: 600; }
+.primary { background: var(--accent); color: #fff; }
+.primary:hover:not(:disabled) { background: var(--accent-hover); }
+.ghost:hover:not(:disabled) { background: var(--hover); }
+.primary:disabled, .ghost:disabled { opacity: 0.55; cursor: default; }

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULTS, loadSettings, sanitize, saveSettings } from "./settings";
-import { isoDob, profileOf } from "./profile";
+import { isoDob, profileOf, validateAvatar, validateProfile } from "./profile";
 
 test("sanitize keeps known keys with valid values and ignores the rest", () => {
   expect(sanitize({ remember: false, cachePerChat: 5000, evil: 1 })).toEqual({ remember: false, cachePerChat: 5000 });
@@ -39,4 +39,31 @@ test("profileOf maps zca-js's profile and survives missing fields", () => {
   expect(p).toEqual({ id: "100", name: "Người dùng thử", avatar: "https://a/b.jpg", cover: "https://c/d.jpg", gender: 1, dob: "1991-02-01", phone: "+84900000000" });
   expect(profileOf({}, "7")).toEqual({ id: "7", name: "", avatar: "", cover: "", gender: 0, dob: "", phone: "" });
   expect(profileOf({ zaloName: "Z", gender: 5 }, "7").gender).toBe(0);
+});
+
+test("validateProfile accepts a good change and refuses anything that should not reach the account", () => {
+  const now = Date.UTC(2026, 10, 9);
+  expect(validateProfile({ name: "  Người   dùng thử ", gender: 1, dob: "1990-02-28" }, now)).toEqual({ name: "Người dùng thử", gender: 1, dob: "1990-02-28" });
+  expect(() => validateProfile({ name: "   ", gender: 0, dob: "1990-01-01" }, now)).toThrow("trống");
+  expect(() => validateProfile({ name: "a".repeat(65), gender: 0, dob: "1990-01-01" }, now)).toThrow("không hợp lệ");
+  expect(() => validateProfile({ name: "a\u0000b", gender: 0, dob: "1990-01-01" }, now)).toThrow("không hợp lệ");
+  expect(() => validateProfile({ name: "A", gender: 2, dob: "1990-01-01" }, now)).toThrow("Giới tính");
+  expect(() => validateProfile({ name: "A", gender: "0", dob: "1990-01-01" }, now)).toThrow("Giới tính");
+  for (const dob of ["1990-02-30", "1990-13-01", "1899-12-31", "2026-11-10", "05/03/1990", "", "1990-1-1"]) expect(() => validateProfile({ name: "A", gender: 0, dob }, now)).toThrow("Ngày sinh");
+  expect(validateProfile({ name: "A", gender: 0, dob: "2026-11-09" }, now).dob).toBe("2026-11-09"); // today is allowed
+  expect(validateProfile({ name: "A", gender: 0, dob: "2000-02-29" }, now).dob).toBe("2000-02-29"); // a real leap day
+  expect(() => validateProfile({ name: "A", gender: 0, dob: "2001-02-29" }, now)).toThrow("Ngày sinh");
+});
+
+test("validateAvatar wants a JPEG of sane size and dimensions", () => {
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(100)]).toString("base64");
+  const ok = validateAvatar({ b64: jpeg, width: 640, height: 640 });
+  expect(ok.data.length).toBe(104);
+  expect([ok.width, ok.height]).toEqual([640, 640]);
+  expect(() => validateAvatar({ b64: Buffer.from("not an image at all").toString("base64"), width: 640, height: 640 })).toThrow("JPEG");
+  expect(() => validateAvatar({ b64: "", width: 640, height: 640 })).toThrow("JPEG");
+  expect(() => validateAvatar({ b64: jpeg, width: 10, height: 640 })).toThrow("Kích thước");
+  expect(() => validateAvatar({ b64: jpeg, width: 640, height: 5000 })).toThrow("Kích thước");
+  expect(() => validateAvatar({ b64: jpeg, width: 640.5, height: 640 })).toThrow("Kích thước");
+  expect(() => validateAvatar({ b64: "A".repeat(7 * 1024 * 1024), width: 640, height: 640 })).toThrow("quá lớn");
 });
