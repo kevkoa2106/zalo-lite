@@ -4,7 +4,7 @@ import "./styles.css";
 import { call, on, type Contact, type Limits, type Me, type Msg, type State, type Sticker, type Thread } from "./api";
 import { ago, clock, day, findQuoted, gapLabel, hue, initials, isGap, size, splitMentions, voiceExt, type Mention } from "./format";
 import { Icon, type IconName } from "./icons";
-import { GearMenu, type GearAction } from "./dialogs";
+import { AccountCard, GearMenu, type GearAction } from "./dialogs";
 
 // ---------- helpers ----------
 
@@ -330,6 +330,7 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
       </nav>
 
       {menu && <GearMenu anchor={menu} gear={gear.current} onClose={(refocus) => (setMenu(null), refocus && refocusGear())} onPick={pickGear} />}
+      {dialog === "account" && <AccountCard onClose={() => setDialog(null)} returnFocus={refocusGear} />}
 
       <ConvList
         view={view}

@@ -1,6 +1,8 @@
 // Dialogs opened from the gear menu: the shared Modal, the account card and the settings dialog.
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
+import { call } from "./api";
+import { dobLabel, hue, initials } from "./format";
 import { Icon, type IconName } from "./icons";
 
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -150,5 +152,82 @@ export function GearMenu({ anchor, gear, onClose, onPick }: {
         )}
       </div>
     </div>
+  );
+}
+
+// ---------- account card ----------
+
+export type Profile = { id: string; name: string; avatar: string; cover: string; gender: 0 | 1; dob: string; phone: string };
+
+/** A round picture, or the person's initials on a colour when there is none (or it fails to load). */
+function Pic({ src, name, id, size }: { src: string; name: string; id: string; size: number }) {
+  const [broken, setBroken] = useState(false);
+  if (src && !broken) return <img class="avatar" src={src} alt="" width={size} height={size} onError={() => setBroken(true)} />;
+  return (
+    <span class="ph" style={{ width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.36)}px`, "--h": hue(id) }} aria-hidden="true">
+      {initials(name)}
+    </span>
+  );
+}
+
+function Head({ title, onClose }: { title: string; onClose: () => void }) {
+  return (
+    <header class="mhead">
+      <h2>{title}</h2>
+      <button class="icon-btn" aria-label="Đóng" onClick={onClose}><Icon name="close" size={22} /></button>
+    </header>
+  );
+}
+
+/** "Thông tin tài khoản": the banner, the avatar, the name and the personal details of the signed-in account. */
+export function AccountCard({ onClose, returnFocus }: { onClose: () => void; returnFocus: () => void }) {
+  const [p, setP] = useState<Profile | null>(null);
+  const [err, setErr] = useState("");
+  const load = () => {
+    setErr("");
+    call<Profile>("profile").then(setP).catch((e) => setErr(e.message));
+  };
+  useEffect(load, []);
+  return (
+    <Modal label="Thông tin tài khoản" onClose={onClose} returnFocus={returnFocus} class="account">
+      <Head title="Thông tin tài khoản" onClose={onClose} />
+      {!p && !err && <div class="spin" style={{ margin: "60px auto" }} role="status" aria-label="Đang tải" />}
+      {err && (
+        <div class="mempty">
+          <p>{err}</p>
+          <button class="update" onClick={load}><Icon name="refresh" size={18} /> Thử lại</button>
+        </div>
+      )}
+      {p && (
+        <>
+          <div class="banner" style={p.cover ? { backgroundImage: `url("${p.cover}")` } : undefined} role="img" aria-label="Ảnh bìa" />
+          <div class="who">
+            <div class="avwrap">
+              <Pic src={p.avatar} name={p.name} id={p.id} size={80} />
+              <button class="cam" aria-label="Đổi ảnh đại diện" disabled><Icon name="camera" size={16} /></button>
+            </div>
+            <div class="nm">
+              <strong>{p.name}</strong>
+              <button class="icon-btn" aria-label="Đổi tên hiển thị" disabled><Icon name="pencil" size={16} /></button>
+            </div>
+          </div>
+          <section class="info">
+            <h3>Thông tin cá nhân</h3>
+            <dl>
+              <dt>Giới tính</dt>
+              <dd>{p.gender === 1 ? "Nữ" : "Nam"}</dd>
+              <dt>Ngày sinh</dt>
+              <dd>{dobLabel(p.dob) || "Chưa cập nhật"}</dd>
+              <dt>Điện thoại</dt>
+              <dd>{p.phone || "Chưa có"}</dd>
+            </dl>
+            <p class="note">Chỉ bạn bè có lưu số của bạn trong danh bạ máy xem được số này</p>
+          </section>
+          <footer class="mfoot">
+            <button class="update" disabled><Icon name="pencil" size={18} /> Cập nhật</button>
+          </footer>
+        </>
+      )}
+    </Modal>
   );
 }

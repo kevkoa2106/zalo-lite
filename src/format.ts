@@ -79,3 +79,9 @@ export function initials(name: string) {
 
 const HUES = [214, 145, 26, 280, 350, 190, 48];
 export const hue = (id: string) => HUES[[...id].reduce((a, c) => a + c.charCodeAt(0), 0) % HUES.length]!;
+
+/** "1990-03-05" as "05 tháng 03, 1990" (the account card's birth date); "" when there is no date. */
+export function dobLabel(iso: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${m[3]} tháng ${m[2]}, ${m[1]}` : "";
+}
