@@ -20,7 +20,7 @@ export function unwrapKey(encrypted: string, privatePem: string, format: number)
 export type NativeLib = {
   decompressAndDecryptDb(inp: string, out: string, key: string): { result: number; err_message?: string };
   decompressAndDecryptDb_V2(inp: string, outDir: string, key: string, progress: () => void): { result: number; inner_error?: number; error_message?: string };
-  parseBinNet(blob: Uint8Array): { result: number; data?: { attachs?: Record<string, any>[] } };
+  parseBinNet(blob: Uint8Array): { result: number; data?: { attachs?: Record<string, any>[]; mentions?: Record<string, any>[]; quote?: Record<string, any> } };
 };
 
 let lib: NativeLib | null = null;
@@ -82,5 +82,11 @@ export function toRaw(row: Row, real: (shortId: string) => string, parse: Native
     const { childNumber: _c, ...rest } = attach;
     content = { ...rest, params: typeof rest.params === "object" && rest.params ? JSON.stringify(rest.params) : (rest.params ?? "") };
   }
-  return { msgId: row.glb, cliMsgId: row.cli, uidFrom: real(row.sender), dName: "", msgType, content, ts: String(row.ts) };
+  const mentions = parsed?.result === 0 ? parsed.data?.mentions : undefined;
+  const quote = parsed?.result === 0 ? parsed.data?.quote : undefined;
+  return {
+    msgId: row.glb, cliMsgId: row.cli, uidFrom: real(row.sender), dName: "", msgType, content, ts: String(row.ts),
+    ...(mentions?.length && { mentions }),
+    ...(quote && { quote: { ...quote, ownerId: real(String(quote.ownerId)) } }),
+  };
 }

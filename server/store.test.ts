@@ -66,6 +66,26 @@ test("recallNotices finds stored recall notices and the message each recalls, no
   expect(s.recallNotices()).toEqual([{ id: "n1", target: "1" }]);
 });
 
+test("missingMentions finds messages whose raw has mentions the stored message lacks", () => {
+  const s = openStore(":memory:");
+  const m = [{ uid: "u2", pos: 0, len: 3 }];
+  s.putMsg({ ...msg("old", "A", 1), raw: { mentions: m } });
+  s.putMsg({ ...msg("ok", "A", 2), raw: { mentions: m }, mentions: m });
+  s.putMsg({ ...msg("empty", "A", 3), raw: { mentions: [] } });
+  s.putMsg({ ...msg("slim", "A", 4), raw: { slim: 1 } });
+  expect(s.missingMentions().map((x) => x.id)).toEqual(["old"]);
+});
+
+test("missingQuoteIds finds messages whose stored quote lacks the target's id and time", () => {
+  const s = openStore(":memory:");
+  const q = { from: "u2", dName: "B", text: "hi" };
+  s.putMsg({ ...msg("old", "A", 1), raw: { quote: { globalMsgId: 5 } }, quote: q });
+  s.putMsg({ ...msg("ok", "A", 2), raw: { quote: { globalMsgId: 5 } }, quote: { ...q, id: "5" } });
+  s.putMsg({ ...msg("none", "A", 3), raw: {} });
+  s.putMsg({ ...msg("slim", "A", 4), raw: { slim: 1 }, quote: q });
+  expect(s.missingQuoteIds().map((x) => x.id)).toEqual(["old"]);
+});
+
 test("count returns the number of stored messages", () => {
   const s = openStore(":memory:");
   expect(s.count()).toBe(0);

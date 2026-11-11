@@ -1,11 +1,18 @@
-// Vietnamese time and size formats as the real client shows them.
+import type { Locale } from "./locale";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
 
 /** Conversation list: "Vài giây", "9 phút", "3 giờ", "2 ngày", then "dd/MM". */
-export function ago(ts: number, now = Date.now()) {
+export function ago(ts: number, now = Date.now(), locale: Locale = "vi") {
   const s = Math.max(0, (now - ts) / 1000);
+  if (locale === "en") {
+    if (s < 60) return "Just now";
+    if (s < 3600) return `${Math.floor(s / 60)}m`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h`;
+    if (s < 7 * 86400) return `${Math.floor(s / 86400)}d`;
+    return new Date(ts).toLocaleDateString("en", { month: "short", day: "numeric" });
+  }
   if (s < 60) return "Vài giây";
   if (s < 3600) return `${Math.floor(s / 60)} phút`;
   if (s < 86400) return `${Math.floor(s / 3600)} giờ`;
@@ -20,11 +27,12 @@ export const clock = (ts: number) => {
 };
 
 /** Day separator in the message list: "Hôm nay", "Hôm qua", "dd/MM/yyyy". */
-export function day(ts: number, now = Date.now()) {
+export function day(ts: number, now = Date.now(), locale: Locale = "vi") {
   const d = new Date(ts);
   const today = new Date(now);
-  if (sameDay(d, today)) return "Hôm nay";
-  if (sameDay(d, new Date(now - 86400000))) return "Hôm qua";
+  if (sameDay(d, today)) return locale === "en" ? "Today" : "Hôm nay";
+  if (sameDay(d, new Date(now - 86400000))) return locale === "en" ? "Yesterday" : "Hôm qua";
+  if (locale === "en") return d.toLocaleDateString("en", { year: "numeric", month: "short", day: "numeric" });
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
 
@@ -33,9 +41,8 @@ export const GAP_MS = 30 * 60 * 1000;
 export const isGap = (prevTs: number, ts: number) => ts - prevTs >= GAP_MS;
 
 /** Label of a time-gap pill: "17:16" today, "17:16 Hôm qua" yesterday, "17:16 dd/MM/yyyy" before that. */
-export function gapLabel(ts: number, now = Date.now()) {
-  const d = day(ts, now);
-  return d === "Hôm nay" ? clock(ts) : `${clock(ts)} ${d}`;
+export function gapLabel(ts: number, now = Date.now(), locale: Locale = "vi") {
+  return sameDay(new Date(ts), new Date(now)) ? clock(ts) : `${clock(ts)} ${day(ts, now, locale)}`;
 }
 
 /** File extension for a recorded voice. Zalo's own voice files are AAC, which Apple's webview records as audio/mp4. */
@@ -81,7 +88,8 @@ const HUES = [214, 145, 26, 280, 350, 190, 48];
 export const hue = (id: string) => HUES[[...id].reduce((a, c) => a + c.charCodeAt(0), 0) % HUES.length]!;
 
 /** "1990-03-05" as "05 tháng 03, 1990" (the account card's birth date); "" when there is no date. */
-export function dobLabel(iso: string) {
+export function dobLabel(iso: string, locale: Locale = "vi") {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (m && locale === "en") return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
   return m ? `${m[3]} tháng ${m[2]}, ${m[1]}` : "";
 }

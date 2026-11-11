@@ -223,6 +223,20 @@ img { display: block; }
 }
 .photo { border-radius: 10px; overflow: hidden; background: var(--raised); cursor: zoom-in; }
 .photo img { max-width: 360px; max-height: 360px; width: auto; height: auto; object-fit: cover; }
+.photo-group { width: min(440px, 100%); display: grid; gap: 4px; }
+.photo-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 4px; }
+.photo-row .msg { display: block; min-width: 0; }
+.photo-row .photo { display: block; width: 100%; aspect-ratio: 3 / 4; border-radius: 0; }
+.photo-row .photo img { display: block; width: 100%; height: 100%; max-width: none; max-height: none; }
+.photo-row .photo:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -3px; }
+.photo-row:first-child .msg:first-child .photo { border-start-start-radius: 10px; }
+.photo-row:first-child .msg:last-child .photo { border-start-end-radius: 10px; }
+.photo-row:last-child .msg:first-child .photo { border-end-start-radius: 10px; }
+.photo-row:last-child .msg:last-child .photo { border-end-end-radius: 10px; }
+.photo-row .tools { position: absolute; inset-block-start: 6px; inset-inline-start: 6px; flex-wrap: wrap; }
+.photo-row .tools:not(.open) { pointer-events: none; }
+.photo-row .msg:hover .tools, .photo-row .msg:focus-within .tools { pointer-events: auto; }
+.photo-row .failed-actions { flex-wrap: wrap; }
 .sticker img { width: 130px; height: 130px; object-fit: contain; }
 .sticker-loading { display: block; width: 130px; height: 130px; border-radius: 10px; background: var(--hover); animation: pulse 1.4s ease-in-out infinite; }
 .sticker-missing { display: inline-block; padding: 9px 12px; border-radius: 10px; background: var(--bubble-them); color: var(--text-2); font-style: italic; }
@@ -427,6 +441,9 @@ video.vid { max-width: 360px; max-height: 360px; border-radius: 10px; background
 .info dl { display: grid; grid-template-columns: 110px 1fr; gap: 14px 8px; margin: 0; }
 .info dt { color: var(--text-2); }
 .info dd { margin: 0; overflow-wrap: anywhere; }
+.person-status { padding-bottom: 16px; overflow-wrap: anywhere; white-space: pre-wrap; }
+[data-profile-trigger] { cursor: pointer; }
+.chat-head .profile-name[data-profile-trigger] { width: fit-content; max-width: 100%; }
 .info .note { margin: 14px 0 0; color: var(--text-2); font-size: 13.5px; }
 .mfoot { margin: 8px 20px 0; border-top: 1px solid var(--border); padding: 4px 0 8px; display: flex; justify-content: center; flex: none; }
 .update { display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 6px; font-weight: 600; }
@@ -491,3 +508,5 @@ p.sdesc { margin: -12px 4px 0; }
 .choice { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 14px 0; text-align: left; min-height: 54px; }
 .choice + .choice { border-top: 1px solid var(--border); }
 .choice .check { color: var(--accent-text); display: flex; }
+/* Message search results: the matched words, tinted with the accent so they read in both themes. */
+.hit mark { background: color-mix(in srgb, var(--accent) 32%, transparent); color: var(--text); border-radius: 3px; padding: 0 1px; }

@@ -1,4 +1,5 @@
 import type { Kind, Msg } from "./store";
+import { readPhotoBatch } from "../src/photo-groups";
 
 const KINDS: Record<string, Kind> = {
   webchat: "text",
@@ -79,11 +80,17 @@ export function normalize(raw: Raw, threadId: string, type: 0 | 1, ownId: string
   let attach: Msg["attach"] = null;
   if (typeof c === "string") text = c;
   else if (c && typeof c === "object") {
-    const params = parseJson(c.params);
-    attach = { ...c, params, ...(isCall && { call: callInfo(String(c.action), params, c.duration) }) };
+    const params = c.params && typeof c.params === "object" ? c.params : parseJson(c.params);
+    const attachment = { ...c, params, ...(isCall && { call: callInfo(String(c.action), params, c.duration) }) };
+    attach = attachment;
     // Captions on photos/links travel in `title` (links) or `description` (photos); calls carry their text in `title`.
     text = kind === "link" ? String(c.href ?? c.title ?? "") : String(c.title ?? c.description ?? c.msg ?? "");
-    if (kind === "photo") text = String(c.description ?? c.title ?? "");
+    if (kind === "photo") {
+      text = String(c.description || c.title || ""); // an empty description leaves the caption in title
+      // The attachment survives after old messages have their raw payload pruned.
+      const batch = readPhotoBatch(attachment, raw);
+      if (batch) Object.assign(attachment, { groupLayoutId: batch.id, idInGroup: batch.index });
+    }
   }
   const from = raw.uidFrom === "0" || raw.uidFrom === ownId ? ownId : String(raw.uidFrom);
   const q = raw.quote;
@@ -102,6 +109,7 @@ export function normalize(raw: Raw, threadId: string, type: 0 | 1, ownId: string
     quote: q
       ? {
           from: String(q.ownerId), dName: String(q.fromD ?? ""), text: String(q.msg || LABELS[KINDS[q.cliMsgType] ?? "other"] || ""),
+          ...(!q.msg && { placeholder: true }),
           // ids are JS numbers and can exceed 2^53, so the UI falls back to ts when the id finds nothing
           ...(q.globalMsgId && { id: String(q.globalMsgId) }), ...(q.cliMsgId && { cliMsgId: String(q.cliMsgId) }), ...(q.ts && { ts: Number(q.ts) || undefined }),
         }

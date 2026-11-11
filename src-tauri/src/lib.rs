@@ -19,6 +19,9 @@ fn free_port() -> u16 {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        // Launch at login (Cài đặt > Cài đặt chung); macOS uses a LaunchAgent so no helper app is needed.
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .setup(|app| {
             let port = free_port();
             let token = uuid::Uuid::new_v4().simple().to_string();

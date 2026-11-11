@@ -4,6 +4,7 @@ import type { ComponentChildren } from "preact";
 import { call } from "./api";
 import { dobLabel, hue, initials, size } from "./format";
 import { Icon, type IconName } from "./icons";
+import { localizeNotice, useLocale, type Locale } from "./locale";
 
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -15,7 +16,7 @@ export function Modal({ label, onClose, returnFocus, class: cls = "", children }
   label: string; onClose: () => void; returnFocus?: () => void; class?: string; children: ComponentChildren;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = box.current!;
     (el.querySelector<HTMLElement>(FOCUSABLE) ?? el).focus();
     const key = (e: KeyboardEvent) => {
@@ -47,7 +48,7 @@ export function Modal({ label, onClose, returnFocus, class: cls = "", children }
 
 export type GearAction = "account" | "settings" | "data-settings" | "sync" | "logout" | "issues";
 
-type Item = { label: string; icon?: IconName; action?: GearAction; danger?: boolean; disabled?: boolean; checked?: boolean; hint?: string; sub?: Item[] };
+type Item = { label: string; icon?: IconName; action?: GearAction; danger?: boolean; disabled?: boolean; locale?: Locale; sub?: Item[] };
 
 // Order and labels follow Zalo PC's gear menu. "Thoát" is left out: quitting needs a Tauri command that is not added yet.
 const MENU: (Item | "-")[] = [
@@ -61,25 +62,29 @@ const MENU: (Item | "-")[] = [
       { label: "Quản lý dữ liệu", icon: "database", action: "data-settings" },
     ],
   },
-  { label: "Ngôn ngữ", icon: "globe", sub: [{ label: "Tiếng Việt", checked: true }, { label: "English", disabled: true, hint: "Chưa hỗ trợ" }] },
-  { label: "Hỗ trợ", icon: "help", sub: [{ label: `Phiên bản ${__APP_VERSION__}`, disabled: true }, { label: "Báo lỗi hoặc góp ý", icon: "link", action: "issues" }] },
+  { label: "Ngôn ngữ", icon: "globe", sub: [{ label: "Tiếng Việt", locale: "vi" }, { label: "English", locale: "en" }] },
+  { label: "Hỗ trợ", icon: "help", sub: [{ label: "Phiên bản {0}", disabled: true }, { label: "Báo lỗi hoặc góp ý", icon: "link", action: "issues" }] },
   "-",
   { label: "Đăng xuất", danger: true, action: "logout" },
 ];
 
-function Row({ item, pick, enter }: { item: Item; pick: (a: GearAction) => void; enter?: () => void }) {
+function Row({ item, pick, pickLocale, enter }: { item: Item; pick: (a: GearAction) => void; pickLocale?: (value: Locale) => void; enter?: () => void }) {
+  const { locale, t } = useLocale();
+  const checked = item.locale === undefined ? undefined : item.locale === locale;
   return (
     <button
-      role={item.checked !== undefined ? "menuitemradio" : "menuitem"}
-      aria-checked={item.checked}
+      role={checked !== undefined ? "menuitemradio" : "menuitem"}
+      aria-checked={checked}
       disabled={item.disabled}
       class={`${item.danger ? "danger" : ""}${item.icon ? "" : " noicon"}`}
       onMouseEnter={enter}
-      onClick={() => item.action && pick(item.action)}
+      onClick={() => {
+        if (item.locale) pickLocale?.(item.locale);
+        else if (item.action) pick(item.action);
+      }}
     >
-      {item.icon && <Icon name={item.icon} size={18} />} {item.label}
-      {item.hint && <span class="hint">{item.hint}</span>}
-      {item.checked && <span class="check"><Icon name="check" size={16} /></span>}
+      {item.icon && <Icon name={item.icon} size={18} />} {item.locale ? item.label : t(item.label, [__APP_VERSION__])}
+      {checked && <span class="check"><Icon name="check" size={16} /></span>}
     </button>
   );
 }
@@ -91,6 +96,7 @@ function Row({ item, pick, enter }: { item: Item; pick: (a: GearAction) => void;
 export function GearMenu({ anchor, gear, onClose, onPick }: {
   anchor: DOMRect; gear: HTMLElement | null; onClose: (refocus: boolean) => void; onPick: (a: GearAction) => void;
 }) {
+  const { t, setLocale } = useLocale();
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x: anchor.left, y: -9999 });
   const [open, setOpen] = useState(-1); // index of the row whose submenu is open
@@ -117,7 +123,7 @@ export function GearMenu({ anchor, gear, onClose, onPick }: {
     else if (e.key === "End") go(-1);
     else if (e.key === "ArrowRight" && (e.target as HTMLElement).getAttribute("aria-haspopup")) {
       e.preventDefault();
-      setOpen(MENU.findIndex((m) => m !== "-" && m.label === (e.target as HTMLElement).textContent?.trim()));
+      setOpen(Number((e.target as HTMLElement).dataset.menuIndex));
       setTimeout(() => (e.target as HTMLElement).parentElement?.querySelector<HTMLElement>(".sub button:not(:disabled)")?.focus());
     } else if ((e.key === "ArrowLeft" || e.key === "Escape") && inSub) {
       e.preventDefault();
@@ -130,19 +136,19 @@ export function GearMenu({ anchor, gear, onClose, onPick }: {
 
   return (
     <div ref={ref} class="pop gear-menu" style={{ left: `${pos.x}px`, top: `${pos.y}px` }} onKeyDown={key}>
-      <div class="menu" role="menu" aria-label="Cài đặt">
+      <div class="menu" role="menu" aria-label={t("Cài đặt")}>
         {MENU.map((it, i) =>
           it === "-" ? (
             <hr />
           ) : it.sub ? (
             <div class="has-sub">
-              <button role="menuitem" aria-haspopup="menu" aria-expanded={open === i} onClick={() => setOpen(open === i ? -1 : i)} onMouseEnter={() => setOpen(i)}>
-                <Icon name={it.icon!} size={18} /> {it.label}
+              <button role="menuitem" aria-haspopup="menu" aria-expanded={open === i} data-menu-index={i} onClick={() => setOpen(open === i ? -1 : i)} onMouseEnter={() => setOpen(i)}>
+                <Icon name={it.icon!} size={18} /> {t(it.label)}
                 <span class="chev"><Icon name="chevron" size={16} /></span>
               </button>
               {open === i && (
-                <div class="pop sub" role="menu" aria-label={it.label}>
-                  {it.sub.map((s) => <Row item={s} pick={onPick} />)}
+                <div class="pop sub" role="menu" aria-label={t(it.label)}>
+                  {it.sub.map((s) => <Row key={s.label} item={s} pick={onPick} pickLocale={(value) => { setLocale(value); onClose(true); }} />)}
                 </div>
               )}
             </div>
@@ -158,6 +164,37 @@ export function GearMenu({ anchor, gear, onClose, onPick }: {
 // ---------- account card ----------
 
 export type Profile = { id: string; name: string; avatar: string; cover: string; gender: 0 | 1; dob: string; phone: string };
+export type Person = { id: string; name: string; avatar: string };
+type PersonDetails = { name?: string; avatar?: string; cover?: string; status?: string };
+
+export function PersonCard({ person, onClose, returnFocus }: {
+  person: Person; onClose: () => void; returnFocus: () => void;
+}) {
+  const { t } = useLocale();
+  const [details, setDetails] = useState<PersonDetails | null>();
+  useEffect(() => {
+    let closed = false;
+    call<PersonDetails | null>("person_profile", { userId: person.id })
+      .then((result) => { if (!closed) setDetails(result); })
+      .catch(() => { if (!closed) setDetails(null); });
+    return () => { closed = true; };
+  }, [person.id]);
+
+  const name = details?.name || person.name;
+  return (
+    <Modal label={t("Trang cá nhân")} onClose={onClose} returnFocus={returnFocus} class="account">
+      <Head title={t("Trang cá nhân")} onClose={onClose} />
+      <div class="banner" style={details?.cover ? { backgroundImage: `url(${JSON.stringify(details.cover)})` } : undefined} />
+      <div class="who">
+        <div class="avwrap"><Pic src={details?.avatar || person.avatar} name={name} id={person.id} size={80} /></div>
+        <div class="nm"><strong>{name}</strong></div>
+      </div>
+      {details?.status && <section class="info person-status">{details.status}</section>}
+      {details === undefined && <p class="mempty" role="status">{t("Đang tải thông tin…")}</p>}
+      {details === null && <p class="mempty" role="status">{t("Không có thêm thông tin hồ sơ.")}</p>}
+    </Modal>
+  );
+}
 
 /** A round picture, or the person's initials on a colour when there is none (or it fails to load). */
 function Pic({ src, name, id, size }: { src: string; name: string; id: string; size: number }) {
@@ -171,10 +208,11 @@ function Pic({ src, name, id, size }: { src: string; name: string; id: string; s
 }
 
 function Head({ title, onClose }: { title: string; onClose: () => void }) {
+  const { t } = useLocale();
   return (
     <header class="mhead">
       <h2>{title}</h2>
-      <button class="icon-btn" aria-label="Đóng" onClick={onClose}><Icon name="close" size={22} /></button>
+      <button class="icon-btn" aria-label={t("Đóng")} onClick={onClose}><Icon name="close" size={22} /></button>
     </header>
   );
 }
@@ -208,6 +246,7 @@ type Pending = { kind: "profile"; name: string; gender: 0 | 1; dob: string } | {
  * asks for one confirmation first. The banner can only be shown: zca-js has no call to change it.
  */
 export function AccountCard({ onClose, returnFocus }: { onClose: () => void; returnFocus: () => void }) {
+  const { locale, t } = useLocale();
   const [p, setP] = useState<Profile | null>(null);
   const [err, setErr] = useState("");
   const [mode, setMode] = useState<"view" | "edit" | "confirm">("view");
@@ -231,8 +270,8 @@ export function AccountCard({ onClose, returnFocus }: { onClose: () => void; ret
   function review(e: Event) {
     e.preventDefault();
     const name = form.name.trim();
-    if (!name) return setFormErr("Tên hiển thị không được để trống");
-    if (!form.dob) return setFormErr("Hãy chọn ngày sinh");
+    if (!name) return setFormErr(t("Tên hiển thị không được để trống"));
+    if (!form.dob) return setFormErr(t("Hãy chọn ngày sinh"));
     setPending({ kind: "profile", name, gender: form.gender, dob: form.dob });
     setFormErr("");
     setMode("confirm");
@@ -268,95 +307,95 @@ export function AccountCard({ onClose, returnFocus }: { onClose: () => void; ret
   }
 
   return (
-    <Modal label="Thông tin tài khoản" onClose={onClose} returnFocus={returnFocus} class="account">
-      <Head title="Thông tin tài khoản" onClose={onClose} />
-      {!p && !err && <div class="spin" style={{ margin: "60px auto" }} role="status" aria-label="Đang tải" />}
+    <Modal label={t("Thông tin tài khoản")} onClose={onClose} returnFocus={returnFocus} class="account">
+      <Head title={t("Thông tin tài khoản")} onClose={onClose} />
+      {!p && !err && <div class="spin" style={{ margin: "60px auto" }} role="status" aria-label={t("Đang tải")} />}
       {err && (
         <div class="mempty">
-          <p>{err}</p>
-          <button class="update" onClick={load}><Icon name="refresh" size={18} /> Thử lại</button>
+          <p>{localizeNotice(locale, err)}</p>
+          <button class="update" onClick={load}><Icon name="refresh" size={18} />{" " + t("Thử lại")}</button>
         </div>
       )}
       {p && (
         <>
-          <div class="banner" style={p.cover ? { backgroundImage: `url("${p.cover}")` } : undefined} role="img" aria-label="Ảnh bìa" />
+          <div class="banner" style={p.cover ? { backgroundImage: `url("${p.cover}")` } : undefined} role="img" aria-label={t("Ảnh bìa")} />
           <div class="who">
             <div class="avwrap">
               <Pic src={p.avatar} name={p.name} id={p.id} size={80} />
-              <button class="cam" aria-label="Đổi ảnh đại diện" onClick={() => file.current!.click()} disabled={busy || mode === "confirm"}><Icon name="camera" size={16} /></button>
+              <button class="cam" aria-label={t("Đổi ảnh đại diện")} onClick={() => file.current!.click()} disabled={busy || mode === "confirm"}><Icon name="camera" size={16} /></button>
               <input ref={file} type="file" accept="image/*" hidden onChange={(e) => { const f = e.currentTarget.files?.[0]; e.currentTarget.value = ""; if (f) pickAvatar(f); }} />
             </div>
             <div class="nm">
               <strong>{p.name}</strong>
-              <button class="icon-btn" aria-label="Đổi tên hiển thị" onClick={edit} disabled={busy || mode !== "view"}><Icon name="pencil" size={16} /></button>
+              <button class="icon-btn" aria-label={t("Đổi tên hiển thị")} onClick={edit} disabled={busy || mode !== "view"}><Icon name="pencil" size={16} /></button>
             </div>
           </div>
 
           {mode === "view" && (
             <>
               <section class="info">
-                <h3>Thông tin cá nhân</h3>
+                <h3>{t("Thông tin cá nhân")}</h3>
                 <dl>
-                  <dt>Giới tính</dt>
-                  <dd>{p.gender === 1 ? "Nữ" : "Nam"}</dd>
-                  <dt>Ngày sinh</dt>
-                  <dd>{dobLabel(p.dob) || "Chưa cập nhật"}</dd>
-                  <dt>Điện thoại</dt>
-                  <dd>{p.phone || "Chưa có"}</dd>
+                  <dt>{t("Giới tính")}</dt>
+                  <dd>{p.gender === 1 ? t("Nữ") : t("Nam")}</dd>
+                  <dt>{t("Ngày sinh")}</dt>
+                  <dd>{dobLabel(p.dob, locale) || t("Chưa cập nhật")}</dd>
+                  <dt>{t("Điện thoại")}</dt>
+                  <dd>{p.phone || t("Chưa có")}</dd>
                 </dl>
-                <p class="note">Chỉ bạn bè có lưu số của bạn trong danh bạ máy xem được số này</p>
-                {formErr && <p class="ferr" role="alert">{formErr}</p>}
+                <p class="note">{t("Chỉ bạn bè có lưu số của bạn trong danh bạ máy xem được số này")}</p>
+                {formErr && <p class="ferr" role="alert">{localizeNotice(locale, formErr)}</p>}
               </section>
               <footer class="mfoot">
-                <button class="update" onClick={edit}><Icon name="pencil" size={18} /> Cập nhật</button>
+                <button class="update" onClick={edit}><Icon name="pencil" size={18} />{" " + t("Cập nhật")}</button>
               </footer>
             </>
           )}
 
           {mode === "edit" && (
             <form class="info eform" onSubmit={review}>
-              <h3>Cập nhật thông tin</h3>
+              <h3>{t("Cập nhật thông tin")}</h3>
               <label>
-                <span>Tên hiển thị</span>
+                <span>{t("Tên hiển thị")}</span>
                 <input value={form.name} maxLength={64} onInput={(e) => setForm({ ...form, name: e.currentTarget.value })} />
               </label>
               <fieldset>
-                <legend>Giới tính</legend>
-                <label class="radio"><input type="radio" name="gender" checked={form.gender === 0} onChange={() => setForm({ ...form, gender: 0 })} /> Nam</label>
-                <label class="radio"><input type="radio" name="gender" checked={form.gender === 1} onChange={() => setForm({ ...form, gender: 1 })} /> Nữ</label>
+                <legend>{t("Giới tính")}</legend>
+                <label class="radio"><input type="radio" name="gender" checked={form.gender === 0} onChange={() => setForm({ ...form, gender: 0 })} />{" " + t("Nam")}</label>
+                <label class="radio"><input type="radio" name="gender" checked={form.gender === 1} onChange={() => setForm({ ...form, gender: 1 })} />{" " + t("Nữ")}</label>
               </fieldset>
               <label>
-                <span>Ngày sinh</span>
+                <span>{t("Ngày sinh")}</span>
                 <input type="date" value={form.dob} max={new Date().toISOString().slice(0, 10)} onInput={(e) => setForm({ ...form, dob: e.currentTarget.value })} />
               </label>
-              {formErr && <p class="ferr" role="alert">{formErr}</p>}
+              {formErr && <p class="ferr" role="alert">{localizeNotice(locale, formErr)}</p>}
               <div class="fbtns">
-                <button type="button" class="ghost" onClick={() => setMode("view")}>Huỷ</button>
-                <button type="submit" class="primary">Tiếp tục</button>
+                <button type="button" class="ghost" onClick={() => setMode("view")}>{t("Huỷ")}</button>
+                <button type="submit" class="primary">{t("Tiếp tục")}</button>
               </div>
             </form>
           )}
 
           {mode === "confirm" && pending && (
             <section class="info confirm">
-              <h3>Xác nhận thay đổi</h3>
-              <p>Thay đổi này sẽ cập nhật tài khoản Zalo thật của bạn.</p>
+              <h3>{t("Xác nhận thay đổi")}</h3>
+              <p>{t("Thay đổi này sẽ cập nhật tài khoản Zalo thật của bạn.")}</p>
               {pending.kind === "avatar" ? (
-                <img class="avprev" src={pending.url} alt="Ảnh đại diện mới" width={96} height={96} />
+                <img class="avprev" src={pending.url} alt={t("Ảnh đại diện mới")} width={96} height={96} />
               ) : (
                 <dl>
-                  <dt>Tên hiển thị</dt>
+                  <dt>{t("Tên hiển thị")}</dt>
                   <dd>{pending.name}</dd>
-                  <dt>Giới tính</dt>
-                  <dd>{pending.gender === 1 ? "Nữ" : "Nam"}</dd>
-                  <dt>Ngày sinh</dt>
-                  <dd>{dobLabel(pending.dob)}</dd>
+                  <dt>{t("Giới tính")}</dt>
+                  <dd>{pending.gender === 1 ? t("Nữ") : t("Nam")}</dd>
+                  <dt>{t("Ngày sinh")}</dt>
+                  <dd>{dobLabel(pending.dob, locale)}</dd>
                 </dl>
               )}
-              {formErr && <p class="ferr" role="alert">{formErr}</p>}
+              {formErr && <p class="ferr" role="alert">{localizeNotice(locale, formErr)}</p>}
               <div class="fbtns">
-                <button class="ghost" onClick={() => (setPending(null), setMode(pending.kind === "profile" ? "edit" : "view"))} disabled={busy}>Quay lại</button>
-                <button class="primary" onClick={apply} disabled={busy}>{busy ? "Đang cập nhật…" : "Xác nhận"}</button>
+                <button class="ghost" onClick={() => (setPending(null), setMode(pending.kind === "profile" ? "edit" : "view"))} disabled={busy}>{t("Quay lại")}</button>
+                <button class="primary" onClick={apply} disabled={busy}>{busy ? t("Đang cập nhật…") : t("Xác nhận")}</button>
               </div>
             </section>
           )}
@@ -393,39 +432,47 @@ function Switch({ checked, onChange, disabled, label }: { checked: boolean; onCh
 }
 
 function Unsupported({ label, note }: { label: string; note?: string }) {
+  const { t } = useLocale();
   return (
     <div class="sempty">
       <h3>{label}</h3>
-      <p>Tính năng này chưa được hỗ trợ trong Zalo Lite. {note}</p>
+      <p>{t("Tính năng này chưa được hỗ trợ trong Zalo Lite.") + " "}{note}</p>
     </div>
   );
 }
 
 function General({ s, save }: { s: SettingsReply | null; save: (p: Partial<AppSettings>) => void }) {
+  const { locale, setLocale, t } = useLocale();
+  // Launch at login lives in the OS (a login item), so the switch always shows what the OS reports. null: not in the app (browser preview).
+  const [autostart, setAutostart] = useState<boolean | null>(null);
+  const readAutostart = () => tauri()?.invoke("plugin:autostart|is_enabled").then((v) => setAutostart(!!v));
+  useEffect(() => void readAutostart()?.catch(() => {}), []);
+  const toggleAutostart = (on: boolean) =>
+    tauri()!.invoke(`plugin:autostart|${on ? "enable" : "disable"}`).catch(() => {}).then(readAutostart);
   return (
     <>
-      <h3>Ngôn ngữ</h3>
+      <h3>{t("Ngôn ngữ")}</h3>
       <div class="scard">
         <div class="srow">
-          <span>Thay đổi ngôn ngữ</span>
+          <span>{t("Thay đổi ngôn ngữ")}</span>
           <span class="sel">
-            <select aria-label="Thay đổi ngôn ngữ">
-              <option>Tiếng Việt</option>
-              <option disabled>English (Chưa hỗ trợ)</option>
+            <select aria-label={t("Thay đổi ngôn ngữ")} value={locale} onChange={(e) => setLocale(e.currentTarget.value === "en" ? "en" : "vi")}>
+              <option value="vi">Tiếng Việt</option>
+              <option value="en">English</option>
             </select>
             <Icon name="down" size={16} />
           </span>
         </div>
       </div>
-      <h3>Khởi động &amp; ghi nhớ tài khoản</h3>
+      <h3>{t("Khởi động & ghi nhớ tài khoản")}</h3>
       <div class="scard">
         <div class="srow">
-          <span>Khởi động Zalo khi mở máy <small class="sub-label">Chưa hỗ trợ</small></span>
-          <Switch checked={false} disabled label="Khởi động Zalo khi mở máy" />
+          <span>{t("Khởi động Zalo khi mở máy")}{autostart === null && <>{" "}<small class="sub-label">{t("Chưa hỗ trợ")}</small></>}</span>
+          <Switch checked={!!autostart} disabled={autostart === null} onChange={toggleAutostart} label={t("Khởi động Zalo khi mở máy")} />
         </div>
         <div class="srow">
-          <span>Ghi nhớ tài khoản đăng nhập</span>
-          <Switch checked={s?.settings.remember ?? true} disabled={!s} onChange={(v) => save({ remember: v })} label="Ghi nhớ tài khoản đăng nhập" />
+          <span>{t("Ghi nhớ tài khoản đăng nhập")}</span>
+          <Switch checked={s?.settings.remember ?? true} disabled={!s} onChange={(v) => save({ remember: v })} label={t("Ghi nhớ tài khoản đăng nhập")} />
         </div>
       </div>
     </>
@@ -436,6 +483,7 @@ function General({ s, save }: { s: SettingsReply | null; save: (p: Partial<AppSe
 export function SettingsDialog({ tab: first, onClose, returnFocus, flash, theme, setTheme }: {
   tab: string; onClose: () => void; returnFocus: () => void; flash: (t: string) => void; theme: Theme; setTheme: (t: Theme) => void;
 }) {
+  const { t } = useLocale();
   const [tab, setTab] = useState<TabId>(TABS.some((t) => t.id === first) ? (first as TabId) : "general");
   const [s, setS] = useState<SettingsReply | null>(null);
   useEffect(() => void call<SettingsReply>("settings").then(setS).catch((e) => flash(e.message)), []);
@@ -453,25 +501,25 @@ export function SettingsDialog({ tab: first, onClose, returnFocus, flash, theme,
   }
 
   return (
-    <Modal label="Cài đặt" onClose={onClose} returnFocus={returnFocus} class="settings">
-      <nav class="snav" role="tablist" aria-orientation="vertical" aria-label="Cài đặt" onKeyDown={key}>
-        <h2>Cài đặt</h2>
-        {TABS.map((t) => (
-          <button id={`tab-${t.id}`} role="tab" aria-selected={tab === t.id} aria-controls="spane" tabIndex={tab === t.id ? 0 : -1} onClick={() => setTab(t.id)}>
-            <Icon name={t.icon} size={20} /> {t.label}
-            {!t.ready && <span class="hint">Chưa hỗ trợ</span>}
+    <Modal label={t("Cài đặt")} onClose={onClose} returnFocus={returnFocus} class="settings">
+      <nav class="snav" role="tablist" aria-orientation="vertical" aria-label={t("Cài đặt")} onKeyDown={key}>
+        <h2>{t("Cài đặt")}</h2>
+        {TABS.map((option) => (
+          <button key={option.id} id={`tab-${option.id}`} role="tab" aria-selected={tab === option.id} aria-controls="spane" tabIndex={tab === option.id ? 0 : -1} onClick={() => setTab(option.id)}>
+            <Icon name={option.icon} size={20} /> {t(option.label)}
+            {!option.ready && <span class="hint">{t("Chưa hỗ trợ")}</span>}
           </button>
         ))}
       </nav>
       <div id="spane" class="spane" role="tabpanel" aria-labelledby={`tab-${tab}`}>
-        <button class="icon-btn sclose" aria-label="Đóng" onClick={onClose}><Icon name="close" size={22} /></button>
+        <button class="icon-btn sclose" aria-label={t("Đóng")} onClick={onClose}><Icon name="close" size={22} /></button>
         {tab === "general" ? <General s={s} save={save} />
           : tab === "account" ? <AccountTab />
           : tab === "sync" ? <Sync flash={flash} />
           : tab === "data" ? <DataTab s={s} save={save} />
           : tab === "look" ? <Look theme={theme} setTheme={setTheme} />
           : tab === "messages" ? <Messages />
-          : <Unsupported label={cur.label} note={tab === "privacy" ? "Hãy đổi quyền riêng tư trong ứng dụng Zalo trên điện thoại." : undefined} />}
+          : <Unsupported label={t(cur.label)} note={tab === "privacy" ? t("Hãy đổi quyền riêng tư trong ứng dụng Zalo trên điện thoại.") : undefined} />}
       </div>
     </Modal>
   );
@@ -482,6 +530,28 @@ export function SettingsDialog({ tab: first, onClose, returnFocus, flash, theme,
 const SEND_KEY = "sendKey"; // "enter" (default) or "mod": the composer reads it on every Enter
 
 /** True when messages are sent with Ctrl or Cmd + Enter and Enter alone starts a new line. */
+/** Tauri's command bridge (`withGlobalTauri`), or undefined in a plain browser. */
+const tauri = () => (window as any).__TAURI__?.core as { invoke: (cmd: string, args?: object) => Promise<unknown> } | undefined;
+
+/**
+ * Show an OS notification. Permission is asked at most once (the first time something would notify); after that
+ * the user's answer stands. Outside the app (browser preview) the web Notification API is used.
+ */
+export async function notify(title: string, body: string) {
+  const ask = () => localStorage.getItem("notifyAsked") !== "1" && (localStorage.setItem("notifyAsked", "1"), true);
+  try {
+    const t = tauri();
+    if (t) {
+      let ok = !!(await t.invoke("plugin:notification|is_permission_granted"));
+      if (!ok && ask()) ok = (await t.invoke("plugin:notification|request_permission")) === "granted";
+      if (ok) await t.invoke("plugin:notification|notify", { options: { title, body } });
+    } else if ("Notification" in window) {
+      if (Notification.permission === "default" && ask()) await Notification.requestPermission();
+      if (Notification.permission === "granted") new Notification(title, { body });
+    }
+  } catch {}
+}
+
 export function sendsWithMod() {
   try {
     return localStorage.getItem(SEND_KEY) === "mod";
@@ -500,11 +570,12 @@ function Choice({ checked, onPick, children }: { checked: boolean; onPick: () =>
 }
 
 function Look({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void }) {
+  const { t } = useLocale();
   return (
     <>
-      <h3>Giao diện</h3>
-      <div class="scard" role="radiogroup" aria-label="Giao diện">
-        {([["dark", "Tối"], ["light", "Sáng"], ["system", "Theo hệ thống"]] as const).map(([v, label]) => (
+      <h3>{t("Giao diện")}</h3>
+      <div class="scard" role="radiogroup" aria-label={t("Giao diện")}>
+        {([["dark", t("Tối")], ["light", t("Sáng")], ["system", t("Theo hệ thống")]] as const).map(([v, label]) => (
           <Choice checked={theme === v} onPick={() => setTheme(v)}>{label}</Choice>
         ))}
       </div>
@@ -513,16 +584,15 @@ function Look({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void 
 }
 
 function Sync({ flash }: { flash: (t: string) => void }) {
+  const { t } = useLocale();
   return (
     <>
-      <h3>Đồng bộ và sao lưu</h3>
+      <h3>{t("Đồng bộ và sao lưu")}</h3>
       <div class="scard">
         <div class="srow">
-          <span>
-            Đồng bộ tin nhắn từ điện thoại
-            <small class="sdesc">Điện thoại sẽ hỏi bạn có đồng ý không. Tin nhắn cũ của bạn bè chỉ có trên điện thoại.</small>
+          <span>{t("Đồng bộ tin nhắn từ điện thoại")}<small class="sdesc">{t("Điện thoại sẽ hỏi bạn có đồng ý không. Tin nhắn cũ của bạn bè chỉ có trên điện thoại.")}</small>
           </span>
-          <button class="primary" onClick={() => call("phone_sync").catch((e) => flash(e.message))}>Đồng bộ</button>
+          <button class="primary" onClick={() => call("phone_sync").catch((e) => flash(e.message))}>{t("Đồng bộ")}</button>
         </div>
       </div>
     </>
@@ -530,19 +600,18 @@ function Sync({ flash }: { flash: (t: string) => void }) {
 }
 
 function DataTab({ s, save }: { s: SettingsReply | null; save: (p: Partial<AppSettings>) => void }) {
+  const { t } = useLocale();
   return (
     <>
-      <h3>Quản lý dữ liệu</h3>
+      <h3>{t("Quản lý dữ liệu")}</h3>
       <div class="scard">
-        <div class="srow"><span>Dung lượng tin nhắn trên máy</span><strong>{s ? size(s.db.bytes) : "…"}</strong></div>
-        <div class="srow"><span>Số tin nhắn đã lưu</span><strong>{s ? s.db.messages.toLocaleString("vi-VN") : "…"}</strong></div>
+        <div class="srow"><span>{t("Dung lượng tin nhắn trên máy")}</span><strong>{s ? size(s.db.bytes) : "…"}</strong></div>
+        <div class="srow"><span>{t("Số tin nhắn đã lưu")}</span><strong>{s ? s.db.messages.toLocaleString("vi-VN") : "…"}</strong></div>
         <div class="srow">
-          <span>
-            Số tin nhắn giữ lại mỗi cuộc trò chuyện
-            <small class="sdesc">Giảm số này sẽ xoá ngay các tin nhắn cũ hơn khỏi máy này. Tin nhắn trên Zalo và điện thoại không bị ảnh hưởng.</small>
+          <span>{t("Số tin nhắn giữ lại mỗi cuộc trò chuyện")}<small class="sdesc">{t("Giảm số này sẽ xoá ngay các tin nhắn cũ hơn khỏi máy này. Tin nhắn trên Zalo và điện thoại không bị ảnh hưởng.")}</small>
           </span>
           <span class="sel">
-            <select aria-label="Số tin nhắn giữ lại mỗi cuộc trò chuyện" disabled={!s} value={s?.settings.cachePerChat} onChange={(e) => save({ cachePerChat: Number(e.currentTarget.value) })}>
+            <select aria-label={t("Số tin nhắn giữ lại mỗi cuộc trò chuyện")} disabled={!s} value={s?.settings.cachePerChat} onChange={(e) => save({ cachePerChat: Number(e.currentTarget.value) })}>
               {[1000, 3000, 5000].map((n) => <option value={n}>{n.toLocaleString("vi-VN")}</option>)}
             </select>
             <Icon name="down" size={16} />
@@ -554,6 +623,7 @@ function DataTab({ s, save }: { s: SettingsReply | null; save: (p: Partial<AppSe
 }
 
 function Messages() {
+  const { t } = useLocale();
   const [mod, setMod] = useState(sendsWithMod());
   const pick = (v: boolean) => {
     setMod(v);
@@ -563,25 +633,26 @@ function Messages() {
   };
   return (
     <>
-      <h3>Tin nhắn</h3>
-      <div class="scard" role="radiogroup" aria-label="Gửi tin nhắn bằng">
-        <Choice checked={!mod} onPick={() => pick(false)}>Enter để gửi, Shift + Enter để xuống dòng</Choice>
-        <Choice checked={mod} onPick={() => pick(true)}>Ctrl hoặc ⌘ + Enter để gửi, Enter để xuống dòng</Choice>
+      <h3>{t("Tin nhắn")}</h3>
+      <div class="scard" role="radiogroup" aria-label={t("Gửi tin nhắn bằng")}>
+        <Choice checked={!mod} onPick={() => pick(false)}>{t("Enter để gửi, Shift + Enter để xuống dòng")}</Choice>
+        <Choice checked={mod} onPick={() => pick(true)}>{t("Ctrl hoặc ⌘ + Enter để gửi, Enter để xuống dòng")}</Choice>
       </div>
     </>
   );
 }
 
 function AccountTab() {
+  const { t } = useLocale();
   const [phone, setPhone] = useState<string | null>(null);
   useEffect(() => void call<Profile>("profile").then((p) => setPhone(p.phone)).catch(() => setPhone("")), []);
   return (
     <>
-      <h3>Tài khoản và bảo mật</h3>
+      <h3>{t("Tài khoản và bảo mật")}</h3>
       <div class="scard">
-        <div class="srow"><span>Số điện thoại</span><strong>{phone === null ? "…" : phone || "Chưa có"}</strong></div>
+        <div class="srow"><span>{t("Số điện thoại")}</span><strong>{phone === null ? "…" : phone || t("Chưa có")}</strong></div>
       </div>
-      <p class="sdesc">Đổi mật khẩu và các cài đặt bảo mật khác hãy dùng ứng dụng Zalo trên điện thoại.</p>
+      <p class="sdesc">{t("Đổi mật khẩu và các cài đặt bảo mật khác hãy dùng ứng dụng Zalo trên điện thoại.")}</p>
     </>
   );
 }

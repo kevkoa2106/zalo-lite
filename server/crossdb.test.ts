@@ -41,3 +41,15 @@ test("rows become messages the app understands, calls included", () => {
   expect(previewOf(call!)).toBe("[Cuộc gọi thoại đến]");
   expect((call!.attach!.call as any).detail).toBe("0 phút 17 giây");
 });
+
+test("mentions in a backup row's BinNet reach the message", () => {
+  const row = { sender: "1", glb: "9", cli: "1", type: 0, ts: 1, text: "@An ơi", bin: new Uint8Array([1]) };
+  const parse = () => ({ result: 0, data: { mentions: [{ type: 0, uid: 42, pos: 0, len: 3 }] } });
+  expect(normalize(toRaw(row, (s) => s, parse), "g", 1, "me").mentions).toEqual([{ uid: "42", pos: 0, len: 3 }]);
+});
+
+test("a backup row's quote reaches the message, with the quoted sender's real id", () => {
+  const row = { sender: "1", glb: "9", cli: "1", type: 0, ts: 1, text: "ok", bin: new Uint8Array([1]) };
+  const parse = () => ({ result: 0, data: { quote: { ownerId: 7, cliMsgId: 5, globalMsgId: 123, cliMsgType: 1, ts: 100, msg: "hi", fromD: "An" } } });
+  expect(normalize(toRaw(row, (s) => `real${s}`, parse), "g", 1, "me").quote).toMatchObject({ from: "real7", dName: "An", text: "hi", id: "123", ts: 100 });
+});

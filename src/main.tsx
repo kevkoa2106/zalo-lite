@@ -4,7 +4,9 @@ import "./styles.css";
 import { call, on, type Contact, type Limits, type Me, type Msg, type State, type Sticker, type Thread } from "./api";
 import { ago, clock, day, findQuoted, gapLabel, hue, initials, isGap, size, splitMentions, voiceExt, type Mention } from "./format";
 import { Icon, type IconName } from "./icons";
-import { AccountCard, GearMenu, SettingsDialog, sendsWithMod, type GearAction } from "./dialogs";
+import { groupPhotos } from "./photo-groups";
+import { LocaleContext, loadLocale, localizeNotice, useLocale } from "./locale";
+import { AccountCard, GearMenu, PersonCard, SettingsDialog, notify, sendsWithMod, type GearAction, type Person } from "./dialogs";
 
 // ---------- helpers ----------
 
@@ -89,6 +91,11 @@ function Popover({ at, onClose, children, label }: { at: { x: number; y: number 
 // ---------- app ----------
 
 function App() {
+  const [locale, setLocale] = useState(loadLocale);
+  useLayoutEffect(() => {
+    document.documentElement.lang = locale;
+    try { localStorage.setItem("language", locale); } catch {}
+  }, [locale]);
   const [state, setState] = useState<State>({ state: "boot" });
   const [up, setUp] = useState(false);
   useEffect(
@@ -99,13 +106,19 @@ function App() {
       }),
     [],
   );
-  if (state.state === "ready" || state.state === "kicked") return <Shell me={state.state === "ready" ? state.me : null} kicked={state.state === "kicked"} up={up} />;
-  return <Login state={state} up={up} />;
+  return (
+    <LocaleContext.Provider value={{ locale, setLocale }}>
+      {state.state === "ready" || state.state === "kicked"
+        ? <Shell me={state.state === "ready" ? state.me : null} kicked={state.state === "kicked"} up={up} />
+        : <Login state={state} up={up} />}
+    </LocaleContext.Provider>
+  );
 }
 
 // ---------- login ----------
 
 function Login({ state, up }: { state: State; up: boolean }) {
+  const { t } = useLocale();
   useEffect(() => {
     if (up && (state.state === "logged_out" || state.state === "error")) call("login_qr").catch(() => {});
   }, [up, state.state]);
@@ -116,40 +129,37 @@ function Login({ state, up }: { state: State; up: boolean }) {
     <main class="login">
       <div class="login-card">
         <p class="brand">Zalo Lite</p>
-        <p class="lead">Đăng nhập tài khoản Zalo<br />để kết nối với ứng dụng Zalo Lite</p>
-        <h2>Đăng nhập qua mã QR</h2>
+        <p class="lead">{t("Đăng nhập tài khoản Zalo")}<br />{t("để kết nối với ứng dụng Zalo Lite")}</p>
+        <h2>{t("Đăng nhập qua mã QR")}</h2>
         {state.state === "scanned" ? (
           <div class="scanned" aria-live="polite">
             <Avatar src={state.avatar} name={state.name} id={state.name} size={88} />
             <div class="who">{state.name}</div>
-            <p class="note" style={{ margin: 0 }}>Vui lòng xác nhận đăng nhập trên điện thoại của bạn.</p>
-            <button class="btn ghost" onClick={() => call("login_qr")}>Dùng tài khoản khác</button>
+            <p class="note" style={{ margin: 0 }}>{t("Vui lòng xác nhận đăng nhập trên điện thoại của bạn.")}</p>
+            <button class="btn ghost" onClick={() => call("login_qr")}>{t("Dùng tài khoản khác")}</button>
           </div>
         ) : (
           <>
             <div class="qr" aria-live="polite">
-              {qrSrc ? <img src={qrSrc} alt="Mã QR đăng nhập" /> : <div class="spin" role="status" aria-label="Đang tải mã QR" />}
+              {qrSrc ? <img src={qrSrc} alt={t("Mã QR đăng nhập")} /> : <div class="spin" role="status" aria-label={t("Đang tải mã QR")} />}
               {(state.state === "qr_expired" || state.state === "error" || !up) && (
                 <div class="veil">
                   {!up ? (
                     <>
                       <div class="spin" style={{ margin: "0 auto" }} />
-                      <span>Đang khởi động…</span>
+                      <span>{t("Đang khởi động…")}</span>
                     </>
                   ) : (
                     <>
-                      <span>{state.state === "error" ? "Không thể tạo mã QR" : "Mã QR hết hạn"}</span>
+                      <span>{state.state === "error" ? t("Không thể tạo mã QR") : t("Mã QR hết hạn")}</span>
                       <button class="btn" onClick={() => call("qr_retry")}>
-                        <Icon name="refresh" size={18} /> Lấy mã mới
-                      </button>
+                        <Icon name="refresh" size={18} />{" " + t("Lấy mã mới")}</button>
                     </>
                   )}
                 </div>
               )}
             </div>
-            <p class="note">
-              Mở ứng dụng Zalo trên điện thoại, chọn <b>Quét mã QR</b> và quét mã này để đăng nhập.
-            </p>
+            <p class="note">{t("Mở ứng dụng Zalo trên điện thoại, chọn") + " "}<b>{t("Quét mã QR")}</b>{" " + t("và quét mã này để đăng nhập.")}</p>
           </>
         )}
       </div>
@@ -162,12 +172,15 @@ function Login({ state, up }: { state: State; up: boolean }) {
 type Typing = Record<string, { uid: string; until: number }>;
 
 function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean }) {
+  const { locale, t } = useLocale();
   const [theme, setTheme] = useTheme();
   const [threads, setThreads] = useState<Record<string, Thread>>({});
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [limits, setLimits] = useState<Limits>({ maxFiles: 10, maxMB: 100 });
   const [active, setActive] = useState<string>("");
+  const openRequest = useRef(0);
+  const failedOpen = useRef("");
   const [msgs, setMsgs] = useState<Record<string, Msg[]>>({});
   const [typing, setTyping] = useState<Typing>({});
   const [view, setView] = useState<"chats" | "contacts">("chats");
@@ -190,6 +203,9 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
   };
   const searchRef = useRef<HTMLInputElement>(null);
   const meId = me?.id ?? "";
+  // The live-event handler below is registered once, so it reads these through refs.
+  const live = useRef({ meId, active: "", t: (s: string) => s });
+  live.current = { meId, active, t };
 
   const flash = (t: string) => {
     setToast(t);
@@ -232,6 +248,14 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
           case "msg": {
             const m = ev.msg as Msg;
             if (ev.thread) setThreads((s) => ({ ...s, [ev.thread.id]: ev.thread }));
+            // OS notification for a new incoming message, unless you are looking at that chat right now.
+            const L = live.current;
+            if (ev.fresh && !m.undone && m.from !== L.meId && !(document.hasFocus() && m.threadId === L.active)) {
+              const th = ev.thread as Thread | undefined;
+              const name = th?.name ?? m.dName;
+              const body = m.text || (th ? L.t(th.preview) : "");
+              notify(th?.type === 1 && m.dName ? `${m.dName} · ${name}` : name, body.length > 120 ? `${body.slice(0, 119)}…` : body);
+            }
             setMsgs((s) => (s[m.threadId] ? { ...s, [m.threadId]: upsert(s[m.threadId]!, m) } : s));
             setTyping((t) => (t[m.threadId]?.uid === m.from ? { ...t, [m.threadId]: { uid: "", until: 0 } } : t));
             break;
@@ -282,8 +306,13 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
     return () => removeEventListener("keydown", key);
   }, []);
 
+  const [jump, setJump] = useState<Hit | null>(null); // a message search result to open and scroll to
+
   async function open(id: string, type: 0 | 1, name?: string, avatar?: string) {
     setView("chats");
+    if (id === active && failedOpen.current !== id) return;
+    failedOpen.current = "";
+    const request = ++openRequest.current;
     if (!threads[id])
       setThreads((s) => ({
         ...s,
@@ -292,9 +321,12 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
     setActive(id);
     try {
       const r = await call<{ thread: Thread; messages: Msg[] }>("open", { threadId: id, type });
+      if (request !== openRequest.current) return;
       setMsgs((s) => ({ ...s, [id]: r.messages }));
       setThreads((s) => ({ ...s, [id]: { ...(s[id] ?? r.thread), ...r.thread, unread: 0, name: r.thread.name !== id ? r.thread.name : (s[id]?.name ?? id) } }));
     } catch (e: any) {
+      if (request !== openRequest.current) return;
+      failedOpen.current = id;
       flash(e.message);
     }
   }
@@ -305,22 +337,22 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
 
   return (
     <div class="shell">
-      <nav class="rail" aria-label="Điều hướng">
+      <nav class="rail" aria-label={t("Điều hướng")}>
         <div class="me" title={me?.name}>
           <Avatar src={me?.avatar} name={me?.name ?? ""} id={meId} size={48} />
         </div>
-        <button class="rail-btn" aria-label="Tin nhắn" aria-current={view === "chats" ? "page" : undefined} onClick={() => setView("chats")}>
+        <button class="rail-btn" aria-label={t("Tin nhắn")} aria-current={view === "chats" ? "page" : undefined} onClick={() => setView("chats")}>
           <Icon name="chat" size={26} />
           {totalUnread > 0 && <span class="dot">{totalUnread > 5 ? "5+" : totalUnread}</span>}
         </button>
-        <button class="rail-btn" aria-label="Danh bạ" aria-current={view === "contacts" ? "page" : undefined} onClick={() => setView("contacts")}>
+        <button class="rail-btn" aria-label={t("Danh bạ")} aria-current={view === "contacts" ? "page" : undefined} onClick={() => setView("contacts")}>
           <Icon name="contacts" size={26} />
         </button>
         <div class="spacer" />
         <button
           ref={gear}
           class="rail-btn"
-          aria-label="Cài đặt"
+          aria-label={t("Cài đặt")}
           aria-haspopup="menu"
           aria-expanded={!!menu}
           onClick={() => setMenu(menu ? null : gear.current!.getBoundingClientRect())}
@@ -344,16 +376,15 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
         meId={meId}
         searchRef={searchRef}
         onOpen={open}
+        onPick={(h) => (open(h.threadId, h.type), setJump(h))}
       />
 
-      <section class="main" aria-label="Cuộc trò chuyện">
+      <section class="main" aria-label={t("Cuộc trò chuyện")}>
         {kicked && (
-          <div class="banner warn" role="alert">
-            Tài khoản đang được dùng trên một máy tính hoặc trình duyệt khác.
-            <button onClick={() => call("reconnect")}>Kết nối lại</button>
+          <div class="banner warn" role="alert">{t("Tài khoản đang được dùng trên một máy tính hoặc trình duyệt khác.")}<button onClick={() => call("reconnect")}>{t("Kết nối lại")}</button>
           </div>
         )}
-        {!up && <div class="banner" role="status">Đang kết nối lại…</div>}
+        {!up && <div class="banner" role="status">{t("Đang kết nối lại…")}</div>}
         {thread ? (
           <Chat
             key={thread.id}
@@ -366,25 +397,25 @@ function Shell({ me, kicked, up }: { me: Me | null; kicked: boolean; up: boolean
             friend={!!contacts.find((c) => c.id === thread.id)?.friend}
             limits={limits}
             flash={flash}
+            jump={jump?.threadId === thread.id ? jump : null}
+            onJumped={() => setJump(null)}
           />
         ) : (
           <div class="welcome">
-            <h1>Chào mừng đến với <b>Zalo Lite</b>!</h1>
-            <p>Nhắn tin với người thân, bạn bè và đồng nghiệp ngay trên máy tính. Chọn một cuộc trò chuyện để bắt đầu.</p>
-            <p class="hint">
-              Nhấn <kbd>{isMac ? "⌘" : "Ctrl"} F</kbd> để tìm cuộc trò chuyện
-            </p>
+            <h1>{t("Chào mừng đến với") + " "}<b>Zalo Lite</b>!</h1>
+            <p>{t("Nhắn tin với người thân, bạn bè và đồng nghiệp ngay trên máy tính. Chọn một cuộc trò chuyện để bắt đầu.")}</p>
+            <p class="hint">{t("Nhấn") + " "}<kbd>{isMac ? "⌘" : "Ctrl"} F</kbd>{" " + t("để tìm cuộc trò chuyện")}</p>
           </div>
         )}
       </section>
-      {toast && <div class="toast" role="status">{toast}</div>}
+      {toast && <div class="toast" role="status">{localizeNotice(locale, toast)}</div>}
     </div>
   );
 }
 
 function upsert(list: Msg[], m: Msg) {
   const i = list.findIndex((x) => x.id === m.id);
-  if (i >= 0) return list.map((x, j) => (j === i ? m : x));
+  if (i >= 0) return list.map((x, j) => (j === i ? { localPhotoBatch: x.localPhotoBatch, ...m } : x));
   const next = [...list, m];
   next.sort((a, b) => a.ts - b.ts);
   return next;
@@ -403,8 +434,23 @@ function ConvList(p: {
   meId: string;
   searchRef: { current: HTMLInputElement | null };
   onOpen: (id: string, type: 0 | 1, name?: string, avatar?: string) => void;
+  onPick: (h: Hit) => void;
 }) {
+  const { locale, t } = useLocale();
   const [q, setQ] = useState("");
+  // Message search (server op "search"): runs 250 ms after typing stops, for 2+ characters; the latest query wins.
+  const [hits, setHits] = useState<{ q: string; list: Hit[] | null; err: string }>({ q: "", list: null, err: "" });
+  useEffect(() => {
+    const query = q.trim();
+    if (fold(query).length < 2) return setHits({ q: "", list: null, err: "" });
+    setHits((h) => ({ ...h, q: query, list: null, err: "" }));
+    const timer = setTimeout(() => {
+      call<Hit[]>("search", { q: query })
+        .then((list) => setHits((h) => (h.q === query ? { q: query, list, err: "" } : h)))
+        .catch((e) => setHits((h) => (h.q === query ? { q: query, list: [], err: e.message } : h)));
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [q]);
   const [tab, setTab] = useState<"all" | "unread">("all");
   const [, tick] = useState(0);
   useEffect(() => {
@@ -429,10 +475,10 @@ function ConvList(p: {
       <div class="search-row">
         <label class="search">
           <Icon name="search" size={18} />
-          <span class="sr">Tìm kiếm</span>
-          <input ref={p.searchRef} placeholder="Tìm kiếm" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
+          <span class="sr">{t("Tìm kiếm")}</span>
+          <input ref={p.searchRef} placeholder={t("Tìm kiếm")} value={q} onInput={(e) => setQ(e.currentTarget.value)} />
           {q && (
-            <button class="icon-btn" style={{ width: "20px", height: "20px" }} aria-label="Xoá tìm kiếm" onClick={() => setQ("")}>
+            <button class="icon-btn" style={{ width: "20px", height: "20px" }} aria-label={t("Xoá tìm kiếm")} onClick={() => setQ("")}>
               <Icon name="close" size={14} />
             </button>
           )}
@@ -440,12 +486,12 @@ function ConvList(p: {
       </div>
       {p.view === "chats" && !fq ? (
         <div class="tabs" role="tablist">
-          <button class="tab" role="tab" aria-selected={tab === "all"} onClick={() => setTab("all")}>Tất cả</button>
-          <button class="tab" role="tab" aria-selected={tab === "unread"} onClick={() => setTab("unread")}>Chưa đọc</button>
+          <button class="tab" role="tab" aria-selected={tab === "all"} onClick={() => setTab("all")}>{t("Tất cả")}</button>
+          <button class="tab" role="tab" aria-selected={tab === "unread"} onClick={() => setTab("unread")}>{t("Chưa đọc")}</button>
         </div>
       ) : (
         <div class="tabs">
-          <span class="tab" aria-selected="true">{fq ? "Kết quả tìm kiếm" : "Danh bạ"}</span>
+          <span class="tab" aria-selected="true">{fq ? t("Kết quả tìm kiếm") : t("Danh bạ")}</span>
         </div>
       )}
     </div>
@@ -455,13 +501,13 @@ function ConvList(p: {
     const groups = p.contacts.filter((c) => c.type === 1).sort((a, b) => a.name.localeCompare(b.name, "vi"));
     const friends = p.contacts.filter((c) => c.type === 0 && c.friend).sort((a, b) => a.name.localeCompare(b.name, "vi"));
     return (
-      <aside class="list" aria-label="Danh bạ">
+      <aside class="list" aria-label={t("Danh bạ")}>
         {head}
         <ul class="items">
-          {!p.contacts.length && <li class="list-empty">{p.loaded ? "Chưa có liên hệ nào" : "Đang tải danh bạ…"}</li>}
-          {friends.length > 0 && <li class="section-label">Bạn bè ({friends.length})</li>}
+          {!p.contacts.length && <li class="list-empty">{p.loaded ? t("Chưa có liên hệ nào") : t("Đang tải danh bạ…")}</li>}
+          {friends.length > 0 && <li class="section-label">{t("Bạn bè (")}{friends.length})</li>}
           {friends.map((c) => <ContactRow c={c} onOpen={p.onOpen} />)}
-          {groups.length > 0 && <li class="section-label">Nhóm ({groups.length})</li>}
+          {groups.length > 0 && <li class="section-label">{t("Nhóm (")}{groups.length})</li>}
           {groups.map((c) => <ContactRow c={c} onOpen={p.onOpen} />)}
         </ul>
       </aside>
@@ -469,16 +515,15 @@ function ConvList(p: {
   }
 
   return (
-    <aside class="list" aria-label="Danh sách trò chuyện">
+    <aside class="list" aria-label={t("Danh sách trò chuyện")}>
       {head}
       <ul class="items">
         {!p.loaded && p.loadError && (
           <li class="list-empty" role="alert">
-            <strong>Không tải được danh sách trò chuyện</strong>
-            {p.loadError}
+            <strong>{t("Không tải được danh sách trò chuyện")}</strong>
+            {localizeNotice(locale, p.loadError)}
             <button class="btn ghost" style={{ marginTop: "12px" }} onClick={p.onRetry}>
-              <Icon name="refresh" size={18} /> Thử lại
-            </button>
+              <Icon name="refresh" size={18} />{" " + t("Thử lại")}</button>
           </li>
         )}
         {!p.loaded && !p.loadError &&
@@ -491,45 +536,84 @@ function ConvList(p: {
               </span>
             </li>
           ))}
-        {p.loaded && !shownThreads.length && !shownContacts.length && (
+        {p.loaded && !shownThreads.length && !shownContacts.length && !hits.list?.length && !(hits.q && !hits.list) && (
           <li class="list-empty">
             {fq ? (
-              <><strong>Không tìm thấy kết quả</strong>Thử tìm bằng tên khác.</>
+              <><strong>{t("Không tìm thấy kết quả")}</strong>{t("Thử tìm bằng tên khác.")}</>
             ) : tab === "unread" ? (
-              <><strong>Không có tin nhắn chưa đọc</strong>Bạn đã xem hết tin nhắn.</>
+              <><strong>{t("Không có tin nhắn chưa đọc")}</strong>{t("Bạn đã xem hết tin nhắn.")}</>
             ) : (
-              <><strong>Chưa có cuộc trò chuyện</strong>Tin nhắn mới sẽ xuất hiện ở đây. Mở Danh bạ để bắt đầu trò chuyện.</>
+              <><strong>{t("Chưa có cuộc trò chuyện")}</strong>{t("Tin nhắn mới sẽ xuất hiện ở đây. Mở Danh bạ để bắt đầu trò chuyện.")}</>
             )}
           </li>
         )}
-        {fq && shownThreads.length > 0 && <li class="section-label">Trò chuyện</li>}
-        {shownThreads.map((t) => (
-          <li>
-            <button class={`item${t.unread ? " unread" : ""}`} aria-current={t.id === p.active} onClick={() => p.onOpen(t.id, t.type)}>
-              <Avatar src={t.avatar} name={t.name} id={t.id} />
+        {fq && shownThreads.length > 0 && <li class="section-label">{t("Trò chuyện")}</li>}
+        {shownThreads.map((thread) => (
+          <li key={thread.id}>
+            <button class={`item${thread.unread ? " unread" : ""}`} aria-current={thread.id === p.active} onClick={() => p.onOpen(thread.id, thread.type)}>
+              <Avatar src={thread.avatar} name={thread.name} id={thread.id} />
               <span class="body">
                 <span class="row">
-                  <span class="name">{t.name}</span>
-                  {t.lastTs > 0 && <span class="time">{ago(t.lastTs)}</span>}
+                  <span class="name">{thread.name}</span>
+                  {thread.lastTs > 0 && <span class="time">{ago(thread.lastTs, undefined, locale)}</span>}
                 </span>
                 <span class="row">
                   <span class="pv">
-                    {t.previewFrom && <span style={{ flex: "none" }}>{t.previewFrom}:</span>}
-                    {PREVIEW_ICON[t.previewKind] && <Icon name={PREVIEW_ICON[t.previewKind]!} size={16} />}
-                    <span>{t.preview}</span>
+                    {thread.previewFrom && <span style={{ flex: "none" }}>
+                      {(thread.previewMine ?? (thread.type === 0 && thread.previewFrom === "Bạn")) ? t("Bạn") : thread.previewFrom}:
+                    </span>}
+                    {PREVIEW_ICON[thread.previewKind] && <Icon name={PREVIEW_ICON[thread.previewKind]!} size={16} />}
+                    <span>{thread.previewKind === "call" && /^\[.*\]$/.test(thread.preview)
+                      ? `[${t(thread.preview.slice(1, -1))}]`
+                      : thread.previewUndone || !["text", "link"].includes(thread.previewKind) ? t(thread.preview) : thread.preview}</span>
                   </span>
-                  {t.unread > 0 && <span class="badge" aria-label={`${t.unread} tin nhắn chưa đọc`}>{t.unread > 99 ? "99+" : t.unread}</span>}
+                  {thread.unread > 0 && <span class="badge" aria-label={t("{0} tin nhắn chưa đọc", [thread.unread])}>{thread.unread > 99 ? "99+" : thread.unread}</span>}
                 </span>
               </span>
             </button>
           </li>
         ))}
-        {shownContacts.length > 0 && <li class="section-label">Liên hệ và nhóm</li>}
+        {shownContacts.length > 0 && <li class="section-label">{t("Liên hệ và nhóm")}</li>}
         {shownContacts.map((c) => <ContactRow c={c} onOpen={p.onOpen} />)}
+        {hits.q && (shownThreads.length > 0 || shownContacts.length > 0 || !hits.list || hits.list.length > 0) && (
+          <li class="section-label">{t("Tin nhắn")}</li>
+        )}
+        {hits.q && !hits.list && <li class="list-empty" role="status">{t("Đang tìm tin nhắn…")}</li>}
+        {hits.err && <li class="list-empty" role="alert">{localizeNotice(locale, hits.err)}</li>}
+        {hits.list && !hits.list.length && !hits.err && (shownThreads.length > 0 || shownContacts.length > 0) && (
+          <li class="list-empty">{t("Không có tin nhắn phù hợp. Thử từ khoá khác hoặc gõ không dấu.")}</li>
+        )}
+        {hits.list?.map((h) => {
+          const th = p.threads[h.threadId];
+          const name = th?.name ?? h.dName;
+          const who = h.from === p.meId ? t("Bạn") : h.dName || name;
+          return (
+            <li key={h.id}>
+              <button class="item hit" onClick={() => p.onPick(h)}>
+                <Avatar src={th?.avatar} name={name} id={h.threadId} size={40} />
+                <span class="body">
+                  <span class="row">
+                    <span class="name">{name}</span>
+                    <span class="time">{ago(h.ts, undefined, locale)}</span>
+                  </span>
+                  <span class="row">
+                    <span class="pv">
+                      <span style={{ flex: "none" }}>{who}:</span>
+                      <span>{h.before}<mark>{h.hit}</mark>{h.after}</span>
+                    </span>
+                  </span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </aside>
   );
 }
+
+/** One message search result from the server (server/store.ts `search`): the hit with a little text around it. */
+type Hit = { id: string; threadId: string; type: 0 | 1; from: string; dName: string; ts: number; before: string; hit: string; after: string };
 
 function ContactRow({ c, onOpen }: { c: Contact; onOpen: (id: string, type: 0 | 1, name?: string, avatar?: string) => void }) {
   return (
@@ -545,6 +629,8 @@ function ContactRow({ c, onOpen }: { c: Contact; onOpen: (id: string, type: 0 | 
 // ---------- chat ----------
 
 type ChatProps = {
+  jump?: Hit | null; // a search result to scroll to once the chat is loaded
+  onJumped?: () => void;
   thread: Thread;
   meId: string;
   meName: string;
@@ -556,7 +642,8 @@ type ChatProps = {
   flash: (t: string) => void;
 };
 
-function Chat({ thread, meId, meName, messages, setMessages, typingName, friend, limits, flash }: ChatProps) {
+function Chat({ thread, meId, meName, messages, setMessages, typingName, friend, limits, flash, jump, onJumped }: ChatProps) {
+  const { locale, t } = useLocale();
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [more, setMore] = useState(true);
@@ -571,6 +658,9 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [replyTo, setReplyTo] = useState<Msg | null>(null);
   const [viewer, setViewer] = useState("");
+  const [person, setPerson] = useState<Person | null>(null);
+  const profilePress = useRef<HTMLElement | null>(null);
+  const profileReturnFocus = useRef<HTMLElement | null>(null);
   const [members, setMembers] = useState<Record<string, { name: string; avatar: string }>>({});
   const prevHeight = useRef(0);
 
@@ -595,8 +685,9 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
     setLoadingOlder(true);
     try {
       const r = await call<{ messages: Msg[] }>("open", { threadId: thread.id, type: thread.type, before: messages[0]!.ts });
+      if (!scroller.current) return;
       if (r.messages.length < 50) setMore(false);
-      prevHeight.current = scroller.current!.scrollHeight;
+      prevHeight.current = scroller.current.scrollHeight;
       setMessages((cur) => [...r.messages.filter((m) => !cur.some((c) => c.id === m.id)), ...cur]);
     } finally {
       setLoadingOlder(false);
@@ -609,7 +700,7 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
     let target = findQuoted(have, q);
     let moreLeft = more;
     const loaded: Msg[] = [];
-    for (let n = 0; !target && moreLeft && n < 20; n++) {
+    for (let n = 0; !target && moreLeft && n < 100; n++) { // 100 pages = 5,000 messages, the largest per-chat cache
       const r = await call<{ messages: Msg[] }>("open", { threadId: thread.id, type: thread.type, before: have[0]!.ts }).catch(() => null);
       if (!r) break;
       if (r.messages.length < 50) moreLeft = false;
@@ -619,7 +710,7 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
       have = [...fresh, ...have];
       target = findQuoted(have, q);
     }
-    if (!target) return flash("Không tìm thấy tin nhắn gốc, có thể đã cũ hơn bộ nhớ của ứng dụng");
+    if (!target) return flash(t("Không tìm thấy tin nhắn gốc, có thể đã cũ hơn bộ nhớ của ứng dụng"));
     stick.current = false;
     if (loaded.length) {
       setMore(moreLeft);
@@ -633,6 +724,13 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
     bubble?.classList.add("flash");
     setTimeout(() => bubble?.classList.remove("flash"), 1500);
   }
+
+  // A message search result picked in the list: scroll to it once this chat's messages are here.
+  useEffect(() => {
+    if (!jump || messages === undefined) return;
+    onJumped?.();
+    jumpTo({ id: jump.id, ts: jump.ts, from: jump.from, dName: "", text: "" });
+  }, [jump, messages === undefined]);
 
   function onScroll() {
     const el = scroller.current!;
@@ -654,7 +752,11 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
     setMessages((list) =>
       tmpIds.reduce((next, tid, i) => {
         const real = msgIds[i];
-        if (real && next.some((x) => x.id === real)) return next.filter((x) => x.id !== tid); // echo already arrived
+        const localPhotoBatch = next.find((x) => x.id === tid)?.localPhotoBatch;
+        if (real && next.some((x) => x.id === real)) {
+          // The echo can arrive before the send reply identifies the matching pending photo.
+          return next.filter((x) => x.id !== tid).map((x) => x.id === real && localPhotoBatch ? { ...x, localPhotoBatch } : x);
+        }
         return next.map((x) => (x.id === tid ? { ...x, id: real ?? x.id, pending: false } : x));
       }, list),
     );
@@ -667,13 +769,16 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
 
   async function sendFiles(files: File[], text: string) {
     const over = files.find((f) => f.size > limits.maxMB * 1024 * 1024);
-    if (over) return flash(`"${over.name}" vượt quá giới hạn ${limits.maxMB} MB của Zalo`);
-    if (files.length > limits.maxFiles) return flash(`Chỉ gửi được tối đa ${limits.maxFiles} file mỗi lần`);
+    if (over) return flash(t('"{0}" vượt quá giới hạn {1} MB của Zalo', [over.name, limits.maxMB]));
+    if (files.length > limits.maxFiles) return flash(t("Chỉ gửi được tối đa {0} file mỗi lần", [limits.maxFiles]));
     const tmps = files.map((f) =>
       f.type.startsWith("image/")
         ? pendingBubble("photo", { thumb: URL.createObjectURL(f), local: true })
         : pendingBubble("file", { title: f.name, params: { fileSize: f.size, fileExt: f.name.split(".").pop() }, local: true }),
     );
+    const batchId = crypto.randomUUID();
+    const photos = tmps.filter((m, i) => m.kind === "photo" && /\.(jpe?g|png|webp)$/i.test(files[i]!.name || "image.png"));
+    if (photos.length > 1) photos.forEach((m, index) => { m.localPhotoBatch = { id: batchId, index }; });
     setMessages((m) => [...m, ...tmps]);
     const ids = tmps.map((t) => t.id);
     try {
@@ -681,7 +786,7 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
       const r = await call<{ msgIds: string[] }>("files", { threadId: thread.id, type: thread.type, files: payload, text });
       settle(ids, r.msgIds);
     } catch (e: any) {
-      fail(ids, () => (dismiss(ids), sendFiles(files, text)), `Gửi file thất bại: ${e.message}`);
+      fail(ids, () => (dismiss(ids), sendFiles(files, text)), t("Gửi file thất bại: {0}", [localizeNotice(locale, e.message)]));
     }
   }
 
@@ -693,12 +798,12 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
       const r = await call<{ msgIds: string[] }>("sticker", { threadId: thread.id, type: thread.type, sticker: s });
       settle([tmp.id], r.msgIds);
     } catch (e: any) {
-      fail([tmp.id], () => (dismiss([tmp.id]), sendSticker(s)), `Gửi sticker thất bại: ${e.message}`);
+      fail([tmp.id], () => (dismiss([tmp.id]), sendSticker(s)), t("Gửi sticker thất bại: {0}", [localizeNotice(locale, e.message)]));
     }
   }
 
   async function sendVoice(blob: Blob, ms: number) {
-    if (blob.size > limits.maxMB * 1024 * 1024) return flash(`Tin nhắn thoại vượt quá giới hạn ${limits.maxMB} MB của Zalo`);
+    if (blob.size > limits.maxMB * 1024 * 1024) return flash(t("Tin nhắn thoại vượt quá giới hạn {0} MB của Zalo", [limits.maxMB]));
     stick.current = true;
     const url = URL.createObjectURL(blob);
     const tmp = pendingBubble("voice", { href: url, params: { duration: ms, m4a: url }, local: true });
@@ -707,7 +812,7 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
       const r = await call<{ msgIds: string[] }>("voice", { threadId: thread.id, type: thread.type, b64: await toB64(blob), ext: voiceExt(blob.type) });
       settle([tmp.id], r.msgIds);
     } catch (e: any) {
-      fail([tmp.id], () => (dismiss([tmp.id]), sendVoice(blob, ms)), `Gửi tin nhắn thoại thất bại: ${e.message}`);
+      fail([tmp.id], () => (dismiss([tmp.id]), sendVoice(blob, ms)), t("Gửi tin nhắn thoại thất bại: {0}", [localizeNotice(locale, e.message)]));
     }
   }
 
@@ -731,109 +836,141 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
     const tmp: Msg = {
       id: `tmp-${Date.now()}`, cliMsgId: "", threadId: thread.id, type: thread.type, from: meId, dName: meName, ts: Date.now(),
       kind: "text", text, attach: null, undone: false, reactions: {}, pending: true,
-      quote: quote ? { from: quote.from, dName: quote.dName, text: quote.text || "Tin nhắn" } : null,
+      quote: quote ? { from: quote.from, dName: quote.dName, text: quote.text || "Tin nhắn", placeholder: !quote.text } : null,
     };
     setMessages((m) => [...m, tmp]);
     try {
       const saved = await call<Msg>("send", { threadId: thread.id, type: thread.type, text, quoteId: quote?.id });
       setMessages((m) => (saved && !m.some((x) => x.id === saved.id) ? m.map((x) => (x.id === tmp.id ? saved : x)) : m.filter((x) => x.id !== tmp.id)));
     } catch (e: any) {
-      fail([tmp.id], () => (dismiss([tmp.id]), send(text, [])), `Không gửi được tin nhắn: ${e.message}`);
+      fail([tmp.id], () => (dismiss([tmp.id]), send(text, [])), t("Không gửi được tin nhắn: {0}", [localizeNotice(locale, e.message)]));
     }
   }
 
   const nameOf = (uid: string, fallback: string) => (uid === meId ? meName : members[uid]?.name || fallback || uid);
   const avatarOf = (uid: string) => (thread.type === 0 && uid === thread.id ? thread.avatar : members[uid]?.avatar ?? "");
+  const profileTrigger = (target: Person) => /^\d{1,32}$/.test(target.id) && target.id !== "0" && target.id !== meId ? {
+    "data-profile-trigger": "",
+    onPointerDown: (e: PointerEvent) => {
+      profilePress.current = e.pointerType === "mouse" && e.button === 0 ? e.currentTarget as HTMLElement : null;
+      if (profilePress.current) profileReturnFocus.current = document.activeElement as HTMLElement | null;
+    },
+    onClick: (e: MouseEvent) => {
+      if (e.detail > 0 && profilePress.current === e.currentTarget) setPerson(target);
+      profilePress.current = null;
+    },
+  } : {};
+  const directProfile = thread.type === 0 ? profileTrigger({ id: thread.id, name: thread.name, avatar: thread.avatar }) : {};
 
   // Group runs of messages by the same sender within 5 minutes, with a pill at each new day and after every long pause.
   const blocks = useMemo(() => {
-    const out: ({ day: string } | { from: string; dName: string; items: Msg[] })[] = [];
+    const out: ({ day: string } | { from: string; dName: string; items: Msg[][] })[] = [];
     let lastDay = "";
     let lastTs = 0;
-    for (const m of messages ?? []) {
-      const d = day(m.ts);
+    for (const photos of groupPhotos(messages ?? [])) {
+      const m = photos[0]!;
+      const d = day(m.ts, undefined, locale);
       if (d !== lastDay) out.push({ day: (lastDay = d) });
-      else if (isGap(lastTs, m.ts)) out.push({ day: gapLabel(m.ts) });
+      else if (isGap(lastTs, m.ts)) out.push({ day: gapLabel(m.ts, undefined, locale) });
       lastTs = m.ts;
       const prev = out[out.length - 1];
-      if (prev && "items" in prev && prev.from === m.from && m.ts - prev.items[prev.items.length - 1]!.ts < 300000) prev.items.push(m);
-      else out.push({ from: m.from, dName: m.dName, items: [m] });
+      if (prev && "items" in prev && prev.from === m.from && m.ts - prev.items.at(-1)![0]!.ts < 300000) prev.items.push(photos);
+      else out.push({ from: m.from, dName: m.dName, items: [photos] });
     }
     return out;
-  }, [messages]);
+  }, [messages, locale]);
+
+  const bubble = (m: Msg, last: boolean) => (
+    <Bubble
+      key={m.id}
+      m={m}
+      mine={m.from === meId}
+      last={last}
+      meId={meId}
+      onReply={() => setReplyTo(m)}
+      onView={setViewer}
+      onJump={jumpTo}
+      flash={flash}
+      onRetry={retries.current.get(m.id)}
+      onDismiss={() => dismiss([m.id])}
+    />
+  );
 
   return (
     <>
       <header class="chat-head">
-        <Avatar src={thread.avatar} name={thread.name} id={thread.id} size={44} />
+        <span {...directProfile}><Avatar src={thread.avatar} name={thread.name} id={thread.id} size={44} /></span>
         <div class="title">
-          <h2>{thread.name}</h2>
+          <h2 class="profile-name" {...directProfile}>{thread.name}</h2>
           <div class="sub">
             {thread.type === 1 ? (
-              <><Icon name="contacts" size={15} /> {thread.members || Object.keys(members).length || ""} thành viên</>
-                        ) : friend ? (
-              "Bạn bè"
+              <><Icon name="contacts" size={15} /> {thread.members || Object.keys(members).length || ""}{" " + t("thành viên")}</>
+            ) : friend ? (
+              t("Bạn bè")
             ) : (
-              "Người lạ"
+              t("Người lạ")
             )}
           </div>
         </div>
       </header>
 
-      <div class="messages" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={`Tin nhắn với ${thread.name}`}>
-        {messages === undefined && <div class="spin" style={{ margin: "40px auto" }} role="status" aria-label="Đang tải tin nhắn" />}
+      {/* Images load after the first scroll and grow the list; re-pin to the bottom on each load unless the user scrolled up. */}
+      <div class="messages" ref={scroller} onScroll={onScroll} onLoadCapture={() => stick.current && (scroller.current!.scrollTop = scroller.current!.scrollHeight)} role="log" aria-live="polite" aria-label={t("Tin nhắn với {0}", [thread.name])}>
+        {messages === undefined && <div class="spin" style={{ margin: "40px auto" }} role="status" aria-label={t("Đang tải tin nhắn")} />}
         {messages?.length === 0 && (
           <div class="list-empty">
-            <strong>Chưa có tin nhắn</strong>
-            {thread.type === 0 ? "Tin nhắn cũ hơn chỉ có trên điện thoại. Tin nhắn mới sẽ được lưu ở đây." : "Nhóm chưa có tin nhắn nào."}
+            <strong>{t("Chưa có tin nhắn")}</strong>
+            {thread.type === 0 ? t("Tin nhắn cũ hơn chỉ có trên điện thoại. Tin nhắn mới sẽ được lưu ở đây.") : t("Nhóm chưa có tin nhắn nào.")}
           </div>
         )}
         {messages && messages.length > 0 && more && (
           <button class="older" onClick={older} disabled={loadingOlder}>
-            {loadingOlder ? "Đang tải…" : "Xem tin nhắn cũ hơn"}
+            {loadingOlder ? t("Đang tải…") : t("Xem tin nhắn cũ hơn")}
           </button>
         )}
-        {blocks.map((b) =>
-          "day" in b ? (
-            <div class="day"><span>{b.day}</span></div>
-          ) : (
+        {blocks.map((b) => {
+          if ("day" in b) return <div class="day"><span>{b.day}</span></div>;
+          const sender = { id: b.from, name: nameOf(b.from, b.dName), avatar: avatarOf(b.from) };
+          const trigger = thread.type === 1 ? profileTrigger(sender) : {};
+          return (
             <div class={`group${b.from === meId ? " me" : ""}`}>
               {b.from !== meId && (
                 <div class="gutter">
-                  <Avatar src={avatarOf(b.from)} name={nameOf(b.from, b.dName)} id={b.from} size={36} />
+                  <span {...trigger}><Avatar src={sender.avatar} name={sender.name} id={b.from} size={36} /></span>
                 </div>
               )}
               <div class="stack">
-                {thread.type === 1 && b.from !== meId && <div class="sender">{nameOf(b.from, b.dName)}</div>}
-                {b.items.map((m, i) => (
-                  <Bubble
-                    m={m}
-                    mine={m.from === meId}
-                    last={i === b.items.length - 1}
-                    meId={meId}
-                    onReply={() => setReplyTo(m)}
-                    onView={setViewer}
-                    onJump={jumpTo}
-                    flash={flash}
-                    onRetry={retries.current.get(m.id)}
-                    onDismiss={() => dismiss([m.id])}
-                  />
-                ))}
+                {thread.type === 1 && b.from !== meId && <div class="sender"><span {...trigger}>{sender.name}</span></div>}
+                {b.items.map((items, i) => {
+                  const last = i === b.items.length - 1;
+                  if (items.length === 1) return bubble(items[0]!, last);
+                  const cols = items.length === 4 ? 2 : 3;
+                  return (
+                    <div class="photo-group" key={items[0]!.id}>
+                      {Array.from({ length: Math.ceil(items.length / cols) }, (_, row) => (
+                        <div class="photo-row" key={row}>
+                          {items.slice(row * cols, (row + 1) * cols).map((m, j) => bubble(m, last && row * cols + j === items.length - 1))}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
               </div>
             </div>
-          ),
-        )}
+          );
+        })}
       </div>
       <div class="typing" aria-live="polite">
         {typingName && (
           <>
-            <span class="dots"><i /><i /><i /></span> {thread.type === 1 ? `${typingName} đang soạn tin…` : "Đang soạn tin…"}
+            <span class="dots"><i /><i /><i /></span> {thread.type === 1 ? t("{0} đang soạn tin…", [typingName]) : t("Đang soạn tin…")}
           </>
         )}
       </div>
       <Composer thread={thread} replyTo={replyTo} replyName={replyTo ? nameOf(replyTo.from, replyTo.dName) : ""} cancelReply={() => setReplyTo(null)} onSend={send} onSticker={sendSticker} onVoice={sendVoice} flash={flash} />
+      {person && <PersonCard person={person} onClose={() => setPerson(null)} returnFocus={() => profileReturnFocus.current?.focus()} />}
       {viewer && (
-        <div class="viewer" role="dialog" aria-label="Xem ảnh" tabIndex={-1} onClick={() => setViewer("")} onKeyDown={(e) => e.key === "Escape" && setViewer("")} ref={(el) => el?.focus()}>
+        <div class="viewer" role="dialog" aria-label={t("Xem ảnh")} tabIndex={-1} onClick={() => setViewer("")} onKeyDown={(e) => e.key === "Escape" && setViewer("")} ref={(el) => el?.focus()}>
           <img src={viewer} alt="" />
         </div>
       )}
@@ -912,6 +1049,7 @@ function peaks(b: AudioBuffer, n = 24) {
 // The audio is decoded in the page (WebAudio) so it plays the same in every webview, whatever type the file host reports.
 // Zalo deletes old voice files; those show as expired.
 function Voice({ a, flash }: { a: Record<string, any>; flash: (t: string) => void }) {
+  const { t } = useLocale();
   const p = (a.params ?? {}) as { duration?: number; m4a?: string; waveformSamples?: number[] };
   const src = String(p.m4a || a.href || "");
   const [state, setState] = useState<"idle" | "loading" | "ready" | "gone">("idle");
@@ -980,7 +1118,7 @@ function Voice({ a, flash }: { a: Record<string, any>; flash: (t: string) => voi
       } catch (e: any) {
         const gone = /hết hạn/.test(e?.message ?? "");
         setState(gone ? "gone" : "idle");
-        return flash(gone ? e.message : e?.message || "Không phát được tin nhắn thoại");
+        return flash(gone ? e.message : e?.message || t("Không phát được tin nhắn thoại"));
       }
     }
     play();
@@ -989,13 +1127,13 @@ function Voice({ a, flash }: { a: Record<string, any>; flash: (t: string) => voi
   const done = total ? at / total : 0;
   return (
     <div class={`voice${state === "gone" ? " gone" : ""}`}>
-      <button class="voice-btn" onClick={toggle} disabled={state === "gone" || state === "loading"} aria-label={state === "gone" ? "Tin nhắn thoại đã hết hạn" : on ? "Tạm dừng" : "Phát tin nhắn thoại"}>
+      <button class="voice-btn" onClick={toggle} disabled={state === "gone" || state === "loading"} aria-label={state === "gone" ? t("Tin nhắn thoại đã hết hạn") : on ? t("Tạm dừng") : t("Phát tin nhắn thoại")}>
         {state === "loading" ? <span class="spin" /> : <Icon name={on ? "pause" : "play"} size={16} />}
       </button>
       <span class="wave" aria-hidden="true">
         {bars.map((h, i) => <i class={i / bars.length < done ? "on" : ""} style={{ height: `${h * 100}%` }} />)}
       </span>
-      <span class="vtime">{state === "gone" ? "Đã hết hạn" : total ? mmss(on || at ? at : total) : ""}</span>
+      <span class="vtime">{state === "gone" ? t("Đã hết hạn") : total ? mmss(on || at ? at : total) : ""}</span>
     </div>
   );
 }
@@ -1005,16 +1143,17 @@ function Bubble({ m, mine, last, meId, onReply, onView, onJump, flash, onRetry, 
   m: Msg; mine: boolean; last: boolean; meId: string; onReply: () => void; onView: (src: string) => void; onJump: (q: NonNullable<Msg["quote"]>) => void;
   flash: (t: string) => void; onRetry?: () => void; onDismiss?: () => void;
 }) {
+  const { locale, t } = useLocale();
   const [pop, setPop] = useState<null | { kind: "react" | "more"; x: number; y: number }>(null);
   const a = m.attach ?? {};
   const params = (a.params ?? {}) as Record<string, any>;
   const reactions = Object.entries(m.reactions);
   const icons = [...new Set(reactions.map(([, r]) => r))].slice(0, 3);
-  const meta = last && <span class="meta">{clock(m.ts)}{m.pending ? " · Đang gửi" : m.failed ? " · Gửi lỗi" : ""}</span>;
+  const meta = last && <span class="meta">{clock(m.ts)}{m.pending ? t(" · Đang gửi") : m.failed ? t(" · Gửi lỗi") : ""}</span>;
 
   let body: any;
   let bare = false;
-  if (m.undone) body = <>Tin nhắn đã được thu hồi{meta}</>;
+  if (m.undone) body = <>{t("Tin nhắn đã được thu hồi")}{meta}</>;
   else
     switch (m.kind) {
       case "photo": {
@@ -1022,10 +1161,10 @@ function Bubble({ m, mine, last, meId, onReply, onView, onJump, flash, onRetry, 
         bare = !m.text;
         body = (
           <>
-            <button class="photo" onClick={() => onView(src)} aria-label="Xem ảnh">
-              <img src={String(a.thumb || a.href)} alt={m.text || "Hình ảnh"} width={params.width} height={params.height} loading="lazy" />
+            <button class="photo" onClick={() => onView(src)} aria-label={t("Xem ảnh")}>
+              <img src={String(a.thumb || a.href)} alt={m.text || t("Hình ảnh")} width={params.width} height={params.height} loading="lazy" />
             </button>
-            {m.text && <div style={{ marginTop: "6px" }}>{m.text}</div>}
+            {m.text && <div style={{ marginTop: "6px" }}><Linkified text={m.text} mentions={m.mentions} /></div>}
             {!bare && meta}
           </>
         );
@@ -1045,7 +1184,7 @@ function Bubble({ m, mine, last, meId, onReply, onView, onJump, flash, onRetry, 
             ) : a.missing ? (
               <span class="sticker-missing">Sticker</span>
             ) : (
-              <span class="sticker-loading" role="status" aria-label="Đang tải sticker" />
+              <span class="sticker-loading" role="status" aria-label={t("Đang tải sticker")} />
             )}
           </span>
         );
@@ -1098,13 +1237,15 @@ function Bubble({ m, mine, last, meId, onReply, onView, onJump, flash, onRetry, 
         body = (
           <>
             <span class={`callcard ${c?.tone ?? "ok"}`}>
-              <b class="ctitle">{c?.title ?? m.text ?? "Cuộc gọi"}</b>
+              <b class="ctitle">{t(c?.title || m.text || "Cuộc gọi")}</b>
               <span class="cdetail">
                 <Icon name={c?.tone === "missed" ? "phoneMissed" : c?.tone === "rejected" ? "phoneRejected" : "phoneIn"} size={20} />
-                {c?.detail}
+                {c?.detail && (locale === "en"
+                  ? t(c.detail).replace(/(\d+) giờ/g, "$1h").replace(/(\d+) phút/g, "$1m").replace(/(\d+) giây/g, "$1s")
+                  : c.detail)}
               </span>
               {c?.callback !== false && (
-                <button class="callback" onClick={() => flash("Zalo Lite chưa hỗ trợ gọi, hãy gọi bằng Zalo trên điện thoại")}>Gọi lại</button>
+                <button class="callback" onClick={() => flash(t("Zalo Lite chưa hỗ trợ gọi, hãy gọi bằng Zalo trên điện thoại"))}>{t("Gọi lại")}</button>
               )}
             </span>
             <span class="calltime">{clock(m.ts)}</span>
@@ -1113,7 +1254,7 @@ function Bubble({ m, mine, last, meId, onReply, onView, onJump, flash, onRetry, 
         break;
       }
       case "other":
-        body = <><i>Tin nhắn này chưa được hỗ trợ hiển thị.</i>{meta}</>;
+        body = <><i>{t("Tin nhắn này chưa được hỗ trợ hiển thị.")}</i>{meta}</>;
         break;
       default:
         body = <><Linkified text={m.text} mentions={m.mentions} />{meta}</>;
@@ -1140,13 +1281,13 @@ function Bubble({ m, mine, last, meId, onReply, onView, onJump, flash, onRetry, 
               ? {
                   role: "button",
                   tabIndex: 0,
-                  title: "Đi tới tin nhắn gốc",
+                  title: t("Đi tới tin nhắn gốc"),
                   onClick: () => onJump(m.quote!),
                   onKeyDown: (e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onJump(m.quote!)),
                 }
               : {})}
           >
-            <b>{m.quote.dName || "Tin nhắn"}</b><span>{m.quote.text}</span>
+            <b>{m.quote.dName || t("Tin nhắn")}</b><span>{m.quote.placeholder ? t(m.quote.text) : m.quote.text}</span>
           </span>
         )}
         {body}
@@ -1159,40 +1300,39 @@ function Bubble({ m, mine, last, meId, onReply, onView, onJump, flash, onRetry, 
       </div>
       {m.failed && (
         <div class="failed-actions">
-          {onRetry && <button onClick={onRetry}><Icon name="refresh" size={15} /> Thử lại</button>}
-          {onDismiss && <button onClick={onDismiss}><Icon name="close" size={15} /> Xoá</button>}
+          {onRetry && <button onClick={onRetry}><Icon name="refresh" size={15} />{" " + t("Thử lại")}</button>}
+          {onDismiss && <button onClick={onDismiss}><Icon name="close" size={15} />{" " + t("Xoá")}</button>}
         </div>
       )}
       {canAct && !m.undone && (
         <div class={`tools${pop ? " open" : ""}`}>
-          <button class="icon-btn" aria-label="Thả cảm xúc" onClick={openPop("react")}><Icon name="smile" size={16} /></button>
-          <button class="icon-btn" aria-label="Trả lời" onClick={onReply}><Icon name="reply" size={16} /></button>
-          <button class="icon-btn" aria-label="Thêm" aria-haspopup="menu" onClick={openPop("more")}><Icon name="more" size={16} /></button>
+          <button class="icon-btn" aria-label={t("Thả cảm xúc")} onClick={openPop("react")}><Icon name="smile" size={16} /></button>
+          <button class="icon-btn" aria-label={t("Trả lời")} onClick={onReply}><Icon name="reply" size={16} /></button>
+          <button class="icon-btn" aria-label={t("Thêm")} aria-haspopup="menu" onClick={openPop("more")}><Icon name="more" size={16} /></button>
         </div>
       )}
       {pop?.kind === "react" && (
-        <Popover at={pop} onClose={() => setPop(null)} label="Chọn cảm xúc">
+        <Popover at={pop} onClose={() => setPop(null)} label={t("Chọn cảm xúc")}>
           <div class="emoji-row">
             {REACTIONS.map(([code, e]) => (
-              <button aria-label={`Thả ${e}`} aria-pressed={m.reactions[meId] === code} onClick={() => act("react", { icon: code })}>{e}</button>
+              <button aria-label={t("Thả {0}", [e])} aria-pressed={m.reactions[meId] === code} onClick={() => act("react", { icon: code })}>{e}</button>
             ))}
           </div>
         </Popover>
       )}
       {pop?.kind === "more" && (
-        <Popover at={pop} onClose={() => setPop(null)} label="Tuỳ chọn tin nhắn">
+        <Popover at={pop} onClose={() => setPop(null)} label={t("Tuỳ chọn tin nhắn")}>
           <div class="menu" role="menu">
             {m.text && (
-              <button role="menuitem" onClick={() => (setPop(null), navigator.clipboard.writeText(m.text), flash("Đã sao chép"))}>
-                <Icon name="copy" size={18} /> Sao chép tin nhắn
-              </button>
+              <button role="menuitem" onClick={() => (setPop(null), navigator.clipboard.writeText(m.text), flash(t("Đã sao chép")))}>
+                <Icon name="copy" size={18} />{" " + t("Sao chép tin nhắn")}</button>
             )}
-            <button role="menuitem" onClick={() => (setPop(null), onReply())}><Icon name="reply" size={18} /> Trả lời</button>
+            <button role="menuitem" onClick={() => (setPop(null), onReply())}><Icon name="reply" size={18} />{" " + t("Trả lời")}</button>
             <hr />
             {mine && (
-              <button role="menuitem" class="danger" onClick={() => act("undo")}><Icon name="undo" size={18} /> Thu hồi</button>
+              <button role="menuitem" class="danger" onClick={() => act("undo")}><Icon name="undo" size={18} />{" " + t("Thu hồi")}</button>
             )}
-            <button role="menuitem" class="danger" onClick={() => act("delete")}><Icon name="trash" size={18} /> Xoá chỉ ở phía tôi</button>
+            <button role="menuitem" class="danger" onClick={() => act("delete")}><Icon name="trash" size={18} />{" " + t("Xoá chỉ ở phía tôi")}</button>
           </div>
         </Popover>
       )}
@@ -1209,6 +1349,7 @@ const packCache: { packs?: Pack[]; stickers: Map<number, Sticker[]> } = { sticke
 
 // Zalo's sticker panel: your packs as tabs along the bottom ("Gần đây" first), search on top.
 function StickerPicker({ at, onPick, onClose }: { at: { x: number; y: number }; onPick: (s: Sticker) => void; onClose: () => void }) {
+  const { t } = useLocale();
   const [q, setQ] = useState("");
   const [packs, setPacks] = useState<Pack[] | null>(packCache.packs ?? null);
   const [tab, setTab] = useState(RECENT);
@@ -1248,38 +1389,38 @@ function StickerPicker({ at, onPick, onClose }: { at: { x: number; y: number }; 
 
   const current = packs?.find((p) => p.id === tab);
   const empty = error
-    ? `Không tải được sticker: ${error}`
+    ? t("Không tải được sticker: {0}", [error])
     : q
-      ? "Không tìm thấy sticker"
+      ? t("Không tìm thấy sticker")
       : tab === RECENT
-        ? "Chưa dùng sticker nào"
-        : "Bộ sticker này trống";
+        ? t("Chưa dùng sticker nào")
+        : t("Bộ sticker này trống");
   return (
     <Popover at={at} onClose={onClose} label="Sticker">
       <div class="stickers">
         <label class="search">
           <Icon name="search" size={16} />
-          <span class="sr">Tìm sticker</span>
-          <input placeholder="Tìm sticker" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
+          <span class="sr">{t("Tìm sticker")}</span>
+          <input placeholder={t("Tìm sticker")} value={q} onInput={(e) => setQ(e.currentTarget.value)} />
         </label>
-        <div class="section-label">{q ? "Kết quả tìm kiếm" : tab === RECENT ? "Gần đây" : current?.name || "Sticker"}</div>
+        <div class="section-label">{q ? t("Kết quả tìm kiếm") : tab === RECENT ? t("Gần đây") : current?.name || "Sticker"}</div>
         <div class="sticker-grid">
           {items === null && Array.from({ length: 8 }, () => <i class="sticker-loading" aria-hidden="true" />)}
           {items?.map((s) => (
-            <button aria-label="Gửi sticker" onClick={() => (onPick(s), onClose())}>
+            <button aria-label={t("Gửi sticker")} onClick={() => (onPick(s), onClose())}>
               <img src={s.url} alt="" loading="lazy" />
             </button>
           ))}
           {items?.length === 0 && <p class="sticker-empty">{empty}</p>}
         </div>
         {!q && (
-          <div class="pack-tabs" role="tablist" aria-label="Bộ sticker">
-            <button role="tab" aria-selected={tab === RECENT} title="Gần đây" aria-label="Gần đây" onClick={() => setTab(RECENT)}>
+          <div class="pack-tabs" role="tablist" aria-label={t("Bộ sticker")}>
+            <button role="tab" aria-selected={tab === RECENT} title={t("Gần đây")} aria-label={t("Gần đây")} onClick={() => setTab(RECENT)}>
               <Icon name="clock" size={22} />
             </button>
             {packs === null && <i class="sticker-loading pack-loading" aria-hidden="true" />}
             {packs?.map((p) => (
-              <button role="tab" aria-selected={tab === p.id} title={p.name} aria-label={p.name || `Bộ sticker ${p.id}`} onClick={() => setTab(p.id)}>
+              <button role="tab" aria-selected={tab === p.id} title={p.name} aria-label={p.name || t("Bộ sticker {0}", [p.id])} onClick={() => setTab(p.id)}>
                 {p.icon ? <img src={p.icon} alt="" loading="lazy" /> : <span class="pack-initial">{initials(p.name || "S")}</span>}
               </button>
             ))}
@@ -1307,6 +1448,7 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
   thread: Thread; replyTo: Msg | null; replyName: string; cancelReply: () => void; onSend: (text: string, files: File[]) => void;
   onSticker: (s: Sticker) => void; onVoice: (blob: Blob, ms: number) => void; flash: (t: string) => void;
 }) {
+  const { t } = useLocale();
   const [text, setText] = useState("");
   // Voice recording: the mic button starts it, the bin discards it, the send button stops it and sends the clip.
   const [recMs, setRecMs] = useState<number | null>(null);
@@ -1319,7 +1461,7 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
       // webview: 10 s recordings came back 8.6 s with a quiet start, and 9.96 s and 9.98 s with all three off (measured with AirPods).
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
     } catch {
-      return flash("Không dùng được micro. Hãy cho phép Zalo Lite truy cập micro trong cài đặt hệ thống");
+      return flash(t("Không dùng được micro. Hãy cho phép Zalo Lite truy cập micro trong cài đặt hệ thống"));
     }
     // AAC (audio/mp4) is what Zalo's own voice messages use; other webviews record webm/opus.
     const type = ["audio/mp4", "audio/webm;codecs=opus", "audio/ogg;codecs=opus"].find((t) => MediaRecorder.isTypeSupported(t));
@@ -1333,12 +1475,12 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
       const ms = Date.now() - r.t0;
       const blob = new Blob(r.chunks, { type: mr.mimeType || type || "audio/mp4" });
       if (!r.send) return;
-      if (ms < 600) return flash("Ghi âm quá ngắn");
-      if (!blob.size) return flash(`Không ghi được âm thanh (${mr.mimeType || type || "không rõ định dạng"}, ${r.chunks.length} đoạn)`);
+      if (ms < 600) return flash(t("Ghi âm quá ngắn"));
+      if (!blob.size) return flash(t("Không ghi được âm thanh ({0}, {1} đoạn)", [mr.mimeType || type || t("không rõ định dạng"), r.chunks.length]));
       // Some microphones deliver only part of what was said; better to say so than to send a clip with silence in it.
       const got = await decodedSeconds(blob);
       if (got !== null && got < ms / 1000 - 1.5 && got < (ms / 1000) * 0.7) {
-        return flash(`Chỉ ghi được ${Math.round(got)} giây trong ${Math.round(ms / 1000)} giây. Micro có thể bị ngắt, hãy thử lại hoặc đổi micro`);
+        return flash(t("Chỉ ghi được {0} giây trong {1} giây. Micro có thể bị ngắt, hãy thử lại hoặc đổi micro", [Math.round(got), Math.round(ms / 1000)]));
       }
       onVoice(blob, ms);
     };
@@ -1354,14 +1496,14 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
   }
   useEffect(() => {
     if (recMs === null) return;
-    const t = setInterval(() => {
+    const timer = setInterval(() => {
       const ms = Date.now() - rec.current!.t0;
       setRecMs(ms);
-      if (ms >= MAX_VOICE_MS) (flash("Đã đạt tối đa 5 phút, đang gửi"), stopRec(true));
+      if (ms >= MAX_VOICE_MS) (flash(t("Đã đạt tối đa 5 phút, đang gửi")), stopRec(true));
     }, 250);
     const esc = (e: KeyboardEvent) => e.key === "Escape" && stopRec(false);
     window.addEventListener("keydown", esc);
-    return () => (clearInterval(t), window.removeEventListener("keydown", esc));
+    return () => (clearInterval(timer), window.removeEventListener("keydown", esc));
   }, [recMs === null]);
   useEffect(() => () => stopRec(false), [thread.id]); // leaving the chat discards a recording in progress
   const [files, setFiles] = useState<File[]>([]);
@@ -1414,13 +1556,13 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
 
   return (
     <div class="composer">
-      {dragging && <div class="drop">Thả file vào đây để gửi</div>}
+      {dragging && <div class="drop">{t("Thả file vào đây để gửi")}</div>}
       {picker && <StickerPicker at={picker} onPick={onSticker} onClose={() => setPicker(null)} />}
       <div class="bar">
         <button
           class="icon-btn"
-          aria-label="Gửi sticker"
-          title="Gửi sticker"
+          aria-label={t("Gửi sticker")}
+          title={t("Gửi sticker")}
           aria-haspopup="dialog"
           onClick={(e) => {
             const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -1429,19 +1571,19 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
         >
           <Icon name="sticker" size={22} />
         </button>
-        <button class="icon-btn" aria-label="Gửi hình ảnh" title="Gửi hình ảnh" onClick={() => imgInput.current!.click()}><Icon name="image" size={22} /></button>
-        <button class="icon-btn" aria-label="Đính kèm file" title="Đính kèm file" onClick={() => fileInput.current!.click()}><Icon name="attach" size={22} /></button>
-        <button class="icon-btn" aria-label="Ghi âm tin nhắn thoại" title="Ghi âm tin nhắn thoại" onClick={startRec} disabled={recMs !== null}><Icon name="mic" size={22} /></button>
+        <button class="icon-btn" aria-label={t("Gửi hình ảnh")} title={t("Gửi hình ảnh")} onClick={() => imgInput.current!.click()}><Icon name="image" size={22} /></button>
+        <button class="icon-btn" aria-label={t("Đính kèm file")} title={t("Đính kèm file")} onClick={() => fileInput.current!.click()}><Icon name="attach" size={22} /></button>
+        <button class="icon-btn" aria-label={t("Ghi âm tin nhắn thoại")} title={t("Ghi âm tin nhắn thoại")} onClick={startRec} disabled={recMs !== null}><Icon name="mic" size={22} /></button>
         <input ref={imgInput} type="file" accept="image/*" multiple hidden onChange={(e) => (setFiles((f) => [...f, ...e.currentTarget.files!]), (e.currentTarget.value = ""))} />
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => (setFiles((f) => [...f, ...e.currentTarget.files!]), (e.currentTarget.value = ""))} />
       </div>
       {replyTo && (
         <div class="replying">
           <div class="rbody">
-            <b><Icon name="reply" size={15} /> Trả lời {replyName}</b>
-            <span>{replyTo.text || "Tin nhắn"}</span>
+            <b><Icon name="reply" size={15} /> {t("Trả lời {0}", [replyName])}</b>
+            <span>{replyTo.text || t("Tin nhắn")}</span>
           </div>
-          <button class="icon-btn" aria-label="Huỷ trả lời" onClick={cancelReply}><Icon name="close" size={16} /></button>
+          <button class="icon-btn" aria-label={t("Huỷ trả lời")} onClick={cancelReply}><Icon name="close" size={16} /></button>
         </div>
       )}
       {files.length > 0 && (
@@ -1449,21 +1591,20 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
           {files.map((f, i) => (
             <span class={`chip${f.type.startsWith("image/") ? " has-thumb" : ""}`}>
               {f.type.startsWith("image/") ? <Thumb file={f} /> : <Icon name="file" size={16} />}
-              <span>{f.name || "Ảnh dán"}</span>
+              <span>{f.name || t("Ảnh dán")}</span>
               {!f.type.startsWith("image/") && <span class="fsize">{size(f.size)}</span>}
-              <button class="icon-btn" aria-label={`Bỏ ${f.name}`} onClick={() => setFiles((fs) => fs.filter((_, j) => j !== i))}><Icon name="close" size={14} /></button>
+              <button class="icon-btn" aria-label={t("Bỏ {0}", [f.name])} onClick={() => setFiles((fs) => fs.filter((_, j) => j !== i))}><Icon name="close" size={14} /></button>
             </span>
           ))}
         </div>
       )}
       {recMs !== null && (
-        <div class="rec" role="status" aria-label="Đang ghi âm">
-          <button class="icon-btn" aria-label="Huỷ ghi âm" title="Huỷ (Esc)" onClick={() => stopRec(false)}><Icon name="trash" size={20} /></button>
+        <div class="rec" role="status" aria-label={t("Đang ghi âm")}>
+          <button class="icon-btn" aria-label={t("Huỷ ghi âm")} title={t("Huỷ (Esc)")} onClick={() => stopRec(false)}><Icon name="trash" size={20} /></button>
           <span class="rec-dot" aria-hidden="true" />
           <span class="rec-time">{mmss(recMs)}</span>
-          <span class="rec-hint">Đang ghi âm…</span>
-          <button class="send" onClick={() => stopRec(true)} aria-label="Gửi tin nhắn thoại">
-            Gửi <Icon name="send" size={18} />
+          <span class="rec-hint">{t("Đang ghi âm…")}</span>
+          <button class="send" onClick={() => stopRec(true)} aria-label={t("Gửi tin nhắn thoại")}>{t("Gửi") + " "}<Icon name="send" size={18} />
           </button>
         </div>
       )}
@@ -1472,8 +1613,8 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
           ref={ta}
           rows={1}
           value={text}
-          aria-label={`Nhập tin nhắn tới ${thread.name}`}
-          placeholder={`Nhập tin nhắn tới ${thread.name}`}
+          aria-label={t("Nhập tin nhắn tới {0}", [thread.name])}
+          placeholder={t("Nhập tin nhắn tới {0}", [thread.name])}
           onInput={(e) => {
             setText(e.currentTarget.value);
             if (Date.now() - lastTyping.current > 3000) {
@@ -1497,8 +1638,7 @@ function Composer({ thread, replyTo, replyName, cancelReply, onSend, onSticker, 
             }
           }}
         />
-        <button class="send" onClick={submit} disabled={!canSend} aria-label="Gửi">
-          Gửi <Icon name="send" size={18} />
+        <button class="send" onClick={submit} disabled={!canSend} aria-label={t("Gửi")}>{t("Gửi") + " "}<Icon name="send" size={18} />
         </button>
       </div>
     </div>

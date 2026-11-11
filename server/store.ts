@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { findMatch, fold, snippet } from "./search";
 
 export type Kind = "text" | "photo" | "sticker" | "file" | "link" | "video" | "voice" | "gif" | "call" | "other";
 
@@ -13,7 +14,7 @@ export type Msg = {
   kind: Kind;
   text: string;
   attach: Record<string, unknown> | null;
-  quote: { from: string; dName: string; text: string; id?: string; cliMsgId?: string; ts?: number } | null; // id/ts locate the quoted message
+  quote: { from: string; dName: string; text: string; id?: string; cliMsgId?: string; ts?: number; placeholder?: boolean } | null; // id/ts locate the quoted message
   mentions?: { uid: string; pos: number; len: number }[]; // ranges of "@name" inside `text` ("-1" = everyone)
   undone: boolean;
   reactions: Record<string, string>; // uid -> icon
@@ -30,6 +31,8 @@ export type Thread = {
   preview: string; // last message text or a label ("Hình ảnh")
   previewKind: Kind;
   previewFrom: string; // "Bạn", a group member's name, or ""
+  previewMine?: boolean;
+  previewUndone?: boolean;
   members: number;
 };
 
@@ -92,6 +95,15 @@ export function openStore(file: string) {
         .query(`SELECT id, json_extract(json, '$.attach.globalMsgId') AS target FROM msgs
                 WHERE json_extract(json, '$.undone') = 1 AND json_extract(json, '$.kind') = 'other' AND json_extract(json, '$.attach.globalMsgId') IS NOT NULL`)
         .all() as { id: string; target: string | number }[],
+    /** Messages stored before mention support: Zalo's raw copy has mentions, the message does not. */
+    missingQuoteIds: () =>
+      (db
+        .query(`SELECT json FROM msgs WHERE json_type(json, '$.raw.quote') = 'object' AND json_type(json, '$.quote') = 'object' AND json_type(json, '$.quote.id') IS NULL AND json_type(json, '$.quote.ts') IS NULL`)
+        .all() as { json: string }[]).map((r) => JSON.parse(r.json) as Msg),
+    missingMentions: () =>
+      (db
+        .query(`SELECT json FROM msgs WHERE json_array_length(json, '$.raw.mentions') > 0 AND json_type(json, '$.mentions') IS NULL`)
+        .all() as { json: string }[]).map((r) => JSON.parse(r.json) as Msg),
     /** Newest-last page of messages older than `before`. */
     page: (thread: string, before = Number.MAX_SAFE_INTEGER, limit = 50) =>
       (q.page.all(thread, before, limit) as { json: string }[]).map((r) => JSON.parse(r.json) as Msg).reverse(),
@@ -136,6 +148,27 @@ export function openStore(file: string) {
     /** Run many writes as one transaction (a 60k-message import in seconds instead of minutes). */
     batch: (fn: () => void) => db.transaction(fn)(),
     count: () => (db.query("SELECT COUNT(*) AS n FROM msgs").get() as { n: number }).n,
+    /**
+     * Messages whose text contains `query` (case and accents ignored), newest first, recalled ones left out.
+     * shortcut: a full scan of the cached messages (tens of thousands, capped per chat), add an FTS5 table if it gets slow.
+     */
+    search: (query: string, limit = 50) => {
+      const q = fold(query.trim());
+      if (q.length < 2) return [];
+      const rows = db
+        .query(`SELECT id, thread, ts, json_extract(json, '$.type') AS type, json_extract(json, '$.from') AS sender,
+                  json_extract(json, '$.dName') AS dName, json_extract(json, '$.text') AS text
+                FROM msgs WHERE json_extract(json, '$.undone') = 0 AND json_extract(json, '$.text') <> '' ORDER BY ts DESC`)
+        .all() as { id: string; thread: string; ts: number; type: 0 | 1; sender: string; dName: string; text: string }[];
+      const out: { id: string; threadId: string; type: 0 | 1; from: string; dName: string; ts: number; before: string; hit: string; after: string }[] = [];
+      for (const r of rows) {
+        if (!fold(r.text).includes(q)) continue;
+        const m = findMatch(r.text, query)!;
+        out.push({ id: r.id, threadId: r.thread, type: r.type, from: r.sender, dName: r.dName, ts: r.ts, ...snippet(r.text, m.start, m.end) });
+        if (out.length >= limit) break;
+      }
+      return out;
+    },
     close: () => db.close(),
   };
 }

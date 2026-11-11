@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-labelledby="b-title">
+  <title id="b-title">Zalo Lite icon, concept B: feather tail</title>
+  <defs>
+    <linearGradient id="b-tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3f8fff"/><stop offset="1" stop-color="#0058e6"/></linearGradient>
+    <linearGradient id="b-edge" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.45"/><stop offset="0.35" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+    <linearGradient id="b-bubble" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#dbe8ff"/></linearGradient>
+    <filter id="b-ground" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="22" stdDeviation="22" flood-color="#000" flood-opacity="0.38"/></filter>
+    <filter id="b-lift" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#00265f" flood-opacity="0.35"/></filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#b-tile)" filter="url(#b-ground)"/>
+  <rect x="101" y="101" width="822" height="822" rx="185" fill="none" stroke="url(#b-edge)" stroke-width="2"/>
+  <g filter="url(#b-lift)">
+    <ellipse cx="520" cy="468" rx="232" ry="156" fill="url(#b-bubble)"/>
+    <path fill="url(#b-bubble)" d="M402 580C356 606 318 650 284 722C358 712 428 676 478 618Z"/>
+  </g>
+</svg>

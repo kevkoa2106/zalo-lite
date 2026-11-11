@@ -3,5 +3,12 @@
   "identifier": "default",
   "description": "Main window: core APIs plus opening links and downloads in the default browser",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:default"]
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "notification:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
+  ]
 }

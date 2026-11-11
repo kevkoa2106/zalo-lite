@@ -22,6 +22,15 @@ test("photo with params and quote", () => {
   expect(previewOf(m)).toBe("Hình ảnh");
 });
 
+test("keeps album metadata on the attachment after the raw message is pruned", () => {
+  const m = normalize({
+    msgId: "12", uidFrom: "u9", msgType: "chat.photo",
+    extMsgProp: '{"groupMediaMsg":{"groupLayoutId":"1700000000000"}}',
+    content: { params: { idInGroup: 2 } },
+  }, "g", 1, "me");
+  expect(m.attach).toMatchObject({ groupLayoutId: "1700000000000", idInGroup: 2 });
+});
+
 test("quote keeps the quoted message's ids and ts; mentions keep their ranges", () => {
   const m = normalize(
     {
@@ -34,6 +43,15 @@ test("quote keeps the quoted message's ids and ts; mentions keep their ranges", 
   expect(m.quote).toEqual({ from: "u2", dName: "Billie", text: "hi", id: "123", cliMsgId: "45", ts: 100 });
   expect(m.mentions).toEqual([{ uid: "u2", pos: 0, len: 7 }]);
   expect(normalize({ msgId: "10", uidFrom: "u", msgType: "webchat", ts: "1", content: "x" }, "g", 1, "me").mentions).toBeUndefined();
+});
+
+test("a photo caption in title is kept when description is empty, with its mention", () => {
+  const m = normalize(
+    { msgId: "11", uidFrom: "u", msgType: "chat.photo", ts: "1", content: { title: "@An xem", description: "", href: "h" }, mentions: [{ uid: "u2", pos: 0, len: 3, type: 0 }] },
+    "g", 1, "me",
+  );
+  expect(m.text).toBe("@An xem");
+  expect(m.mentions).toEqual([{ uid: "u2", pos: 0, len: 3 }]);
 });
 
 test("recalled and unknown types", () => {

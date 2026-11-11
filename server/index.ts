@@ -157,6 +157,22 @@ async function ready(a: API) {
     for (const n of store.recallNotices()) (recall(String(n.target)), store.delMsg(n.id));
     store.set("fix:recalls", "1");
   }
+  // Messages stored before mentions were read keep them in their raw copy only, and a re-sync never refetches them: fill them in once.
+  if (!store.get("fix:mentions")) {
+    for (const m of store.missingMentions()) {
+      const { text, mentions } = normalize(m.raw as Record<string, any>, m.threadId, m.type, me.id); // text: a photo caption the old code lost
+      if (mentions) store.putMsg({ ...m, text, mentions });
+    }
+    store.set("fix:mentions", "1");
+  }
+  // Replies stored before quote ids were kept cannot jump to what they quote: rebuild the quote from the raw copy once.
+  if (!store.get("fix:quotes")) {
+    for (const m of store.missingQuoteIds()) {
+      const { quote } = normalize(m.raw as Record<string, any>, m.threadId, m.type, me.id);
+      if (quote) store.putMsg({ ...m, quote });
+    }
+    store.set("fix:quotes", "1");
+  }
   trim();
   setInterval(trim, 3600_000).unref();
   store.putPerson(me.id, me.name, me.avatar);
@@ -533,7 +549,7 @@ function ingest(raw: Record<string, any>, threadId: string, type: ThreadType, li
       broadcast({ ev: "thread", thread: store!.thread(t.id) });
     }).catch(() => {});
   }
-  if (live) broadcast({ ev: "msg", msg: m, thread: store.thread(threadId) });
+  if (live) broadcast({ ev: "msg", msg: m, thread: store.thread(threadId), fresh: !prev }); // fresh: new, not an edit or a reaction
   return m;
 }
 
@@ -548,6 +564,8 @@ function touchThread(m: Msg, unread = false) {
     t.preview = previewOf(m);
     t.previewKind = m.undone ? "text" : m.kind;
     t.previewFrom = m.from === me.id ? "Bạn" : m.type === 1 ? m.dName : "";
+    t.previewMine = m.from === me.id;
+    t.previewUndone = m.undone;
   }
   if (unread) t.unread++;
   store!.putThread(t);
@@ -584,11 +602,25 @@ async function handle(r: Req): Promise<unknown> {
     return m;
   };
   switch (r.op) {
+    case "search":
+      return store.search(String(r.q ?? ""));
     case "bootstrap":
       return { threads: threadList(), contacts: contacts(), limits: fileLimits() };
     case "profile":
       if (!accountInfo) throw new Error("Chưa tải được thông tin tài khoản");
       return profileOf(accountInfo, me.id);
+    case "person_profile": {
+      const id = typeof r.userId === "string" ? r.userId : "";
+      if (!/^\d{1,32}$/.test(id) || id === "0") throw new Error("Invalid user ID");
+      const { changed_profiles } = await api.getUserInfo(id);
+      const person = Object.entries(changed_profiles ?? {}).find(([key]) => key.split("_")[0] === id)?.[1];
+      return person ? {
+        name: person.displayName || person.zaloName,
+        avatar: person.avatar,
+        cover: person.cover,
+        status: person.status,
+      } : null;
+    }
     // These two change the real Zalo account; the UI asks for a confirmation first and Zalo's own error is passed on as it is.
     case "profile_update": {
       const v = validateProfile(r);

@@ -91,7 +91,7 @@ All optional, set as environment variables.
   - A message you send shows a flat waveform until it has been played once, and the player has no seek bar.
   - Recording turns the system's echo cancellation, noise suppression and gain control off, because they cut audio from Bluetooth headsets (measured with AirPods). The first second after pressing the mic button can be quiet while a headset switches modes.
   - Allow the microphone when macOS asks; if it was denied, turn it on in System Settings, Privacy & Security, Microphone.
-- **Mentions are display-only.** `@name` shows in blue, but you cannot yet pick someone with `@` while typing. Messages imported from the phone carry no mentions and no reply targets, so their quotes are not clickable.
+- **Mentions are display-only.** `@name` shows in blue, but you cannot yet pick someone with `@` while typing. Messages imported from the phone keep their mentions and reply quotes (import again to fix ones imported before this).
 - **Old messages are slimmed.** Beyond the newest 200 messages per chat, the app drops Zalo's duplicate copy of each message to save disk space. Replying to such an old message is rebuilt from its stored text and has not been tried against Zalo.
 - **Account and settings.**
   - Changing the name, gender, birth date or avatar writes to your real Zalo account. The app validates the input and asks for one confirmation, but these calls have only been tested against a mock, never on a live account, and Zalo may limit how often some fields can change. Its error is shown as it is.
