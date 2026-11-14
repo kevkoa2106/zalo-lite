@@ -645,8 +645,9 @@ type ChatProps = {
 function Chat({ thread, meId, meName, messages, setMessages, typingName, friend, limits, flash, jump, onJumped }: ChatProps) {
   const { locale, t } = useLocale();
   const scroller = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
-  const [more, setMore] = useState(true);
+  const [more, setMore] = useState(messages ? messages.length >= 50 : true);
   // A first page shorter than a full page means there is nothing older to load.
   const sized = useRef(false);
   useEffect(() => {
@@ -679,6 +680,17 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
       prevHeight.current = 0;
     } else if (stick.current) el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el || !content.current) return;
+    const resize = new ResizeObserver(() => {
+      if (stick.current) el.scrollTop = el.scrollHeight;
+    });
+    resize.observe(content.current);
+    resize.observe(el);
+    return () => resize.disconnect();
+  }, []);
 
   async function older() {
     if (!messages?.length || loadingOlder || !more) return;
@@ -914,51 +926,52 @@ function Chat({ thread, meId, meName, messages, setMessages, typingName, friend,
         </div>
       </header>
 
-      {/* Images load after the first scroll and grow the list; re-pin to the bottom on each load unless the user scrolled up. */}
-      <div class="messages" ref={scroller} onScroll={onScroll} onLoadCapture={() => stick.current && (scroller.current!.scrollTop = scroller.current!.scrollHeight)} role="log" aria-live="polite" aria-label={t("Tin nhắn với {0}", [thread.name])}>
-        {messages === undefined && <div class="spin" style={{ margin: "40px auto" }} role="status" aria-label={t("Đang tải tin nhắn")} />}
-        {messages?.length === 0 && (
-          <div class="list-empty">
-            <strong>{t("Chưa có tin nhắn")}</strong>
-            {thread.type === 0 ? t("Tin nhắn cũ hơn chỉ có trên điện thoại. Tin nhắn mới sẽ được lưu ở đây.") : t("Nhóm chưa có tin nhắn nào.")}
-          </div>
-        )}
-        {messages && messages.length > 0 && more && (
-          <button class="older" onClick={older} disabled={loadingOlder}>
-            {loadingOlder ? t("Đang tải…") : t("Xem tin nhắn cũ hơn")}
-          </button>
-        )}
-        {blocks.map((b) => {
-          if ("day" in b) return <div class="day"><span>{b.day}</span></div>;
-          const sender = { id: b.from, name: nameOf(b.from, b.dName), avatar: avatarOf(b.from) };
-          const trigger = thread.type === 1 ? profileTrigger(sender) : {};
-          return (
-            <div class={`group${b.from === meId ? " me" : ""}`}>
-              {b.from !== meId && (
-                <div class="gutter">
-                  <span {...trigger}><Avatar src={sender.avatar} name={sender.name} id={b.from} size={36} /></span>
-                </div>
-              )}
-              <div class="stack">
-                {thread.type === 1 && b.from !== meId && <div class="sender"><span {...trigger}>{sender.name}</span></div>}
-                {b.items.map((items, i) => {
-                  const last = i === b.items.length - 1;
-                  if (items.length === 1) return bubble(items[0]!, last);
-                  const cols = items.length === 4 ? 2 : 3;
-                  return (
-                    <div class="photo-group" key={items[0]!.id}>
-                      {Array.from({ length: Math.ceil(items.length / cols) }, (_, row) => (
-                        <div class="photo-row" key={row}>
-                          {items.slice(row * cols, (row + 1) * cols).map((m, j) => bubble(m, last && row * cols + j === items.length - 1))}
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })}
-              </div>
+      <div class="messages" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={t("Tin nhắn với {0}", [thread.name])}>
+        <div class="message-content" ref={content}>
+          {messages === undefined && <div class="spin" style={{ margin: "40px auto" }} role="status" aria-label={t("Đang tải tin nhắn")} />}
+          {messages?.length === 0 && (
+            <div class="list-empty">
+              <strong>{t("Chưa có tin nhắn")}</strong>
+              {thread.type === 0 ? t("Tin nhắn cũ hơn chỉ có trên điện thoại. Tin nhắn mới sẽ được lưu ở đây.") : t("Nhóm chưa có tin nhắn nào.")}
             </div>
-          );
-        })}
+          )}
+          {messages && messages.length > 0 && more && (
+            <button class="older" onClick={older} disabled={loadingOlder}>
+              {loadingOlder ? t("Đang tải…") : t("Xem tin nhắn cũ hơn")}
+            </button>
+          )}
+          {blocks.map((b) => {
+            if ("day" in b) return <div class="day"><span>{b.day}</span></div>;
+            const sender = { id: b.from, name: nameOf(b.from, b.dName), avatar: avatarOf(b.from) };
+            const trigger = thread.type === 1 ? profileTrigger(sender) : {};
+            return (
+              <div class={`group${b.from === meId ? " me" : ""}`}>
+                {b.from !== meId && (
+                  <div class="gutter">
+                    <span {...trigger}><Avatar src={sender.avatar} name={sender.name} id={b.from} size={36} /></span>
+                  </div>
+                )}
+                <div class="stack">
+                  {thread.type === 1 && b.from !== meId && <div class="sender"><span {...trigger}>{sender.name}</span></div>}
+                  {b.items.map((items, i) => {
+                    const last = i === b.items.length - 1;
+                    if (items.length === 1) return bubble(items[0]!, last);
+                    const cols = items.length === 4 ? 2 : 3;
+                    return (
+                      <div class="photo-group" key={items[0]!.id}>
+                        {Array.from({ length: Math.ceil(items.length / cols) }, (_, row) => (
+                          <div class="photo-row" key={row}>
+                            {items.slice(row * cols, (row + 1) * cols).map((m, j) => bubble(m, last && row * cols + j === items.length - 1))}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
       <div class="typing" aria-live="polite">
         {typingName && (
