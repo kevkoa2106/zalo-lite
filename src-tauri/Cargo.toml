@@ -1,6 +1,6 @@
 [package]
 name = "zalo-lite"
-version = "0.1.2"
+version = "0.1.3"
 description = "Lightweight Zalo messaging client"
 edition = "2024"
 rust-version = "1.90"
