@@ -17,7 +17,7 @@ The project uses **Bun** for everything: `bun` instead of `node`, `bun test` ins
 
 1. `bun check` and `bun run test` pass.
 2. UI changes: check dark and light themes and a narrow window.
-3. Protocol changes: add what you learned to `docs/PROTOCOL.md` (endpoint, parameters, what the server answers). Print shapes and counts in notes and logs, never message text, tokens or ids from a real account.
+3. Protocol changes: document findings in `docs/PROTOCOL.md` or the relevant focused guide under `docs/` (endpoint, parameters, what the server answers). Print shapes and counts in notes and logs, never message text, tokens or ids from a real account.
 4. Keep commits small, with a message saying what changed and why.
 
 ## What not to commit
@@ -26,4 +26,4 @@ Anything private to an account: `session.json`, cookies, keys, `*.db` message ca
 
 ## Scope
 
-Messaging only. Zalo's social features, mini-apps and calling are out of scope. Features should follow what Zalo PC does, so a Zalo user trusts the app on sight.
+Zalo's social features and mini-apps are out of scope. Voice and video calls are not implemented; the [calling investigation and test harness](docs/calling-protocol.md) cover protocol feasibility. Features should follow what Zalo PC does, so a Zalo user trusts the app on sight.

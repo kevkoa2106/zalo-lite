@@ -84,7 +84,7 @@ All optional, set as environment variables.
 
 - **One web session at a time.** Like Zalo Web, signing in here signs out other web or PC sessions.
 - **Group history.** Zalo withholds some group history from new devices; phone sync fills most of it.
-- **Calls.** Call records are shown, but placing or answering voice or video calls is not supported. Zalo PC runs calls in a separate native WebRTC process with signalling that is not documented here, so this is a project of its own ([feasibility notes](docs/PROTOCOL.md)).
+- **Calls.** Call records are shown, but placing or answering voice or video calls is not supported. The [calling protocol investigation and diagnostic harness](docs/calling-protocol.md) document the signaling boundary. Media interoperability remains unverified.
 - **Voice messages.**
   - Zalo deletes old voice files from its servers, so older ones (including those imported from the phone) show "Đã hết hạn" and cannot be played.
   - Recordings are limited to 5 minutes and come out as AAC on macOS. On Windows and Linux the webview records WebM/Opus, which Zalo's phone app may not play (untested).

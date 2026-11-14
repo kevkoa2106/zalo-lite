@@ -27,6 +27,9 @@
   "dependencies": {
     "preact": "^11.1.1",
     "xz-decompress": "^0.2.3",
-    "zca-js": "^2.2.0"
+    "zca-js": "2.2.0"
+  },
+  "patchedDependencies": {
+    "zca-js@2.2.0": "patches/zca-js@2.2.0.patch"
   }
 }
