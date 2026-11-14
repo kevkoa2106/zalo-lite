@@ -12,6 +12,8 @@ import { loginPcQr, PcQrError } from "./pclogin";
 import { fetchAudio } from "./media";
 import { loadSettings, saveSettings, sanitize } from "./settings";
 import { profileOf, validateAvatar, validateProfile } from "./profile";
+import { CallControls } from "./calling/protocol";
+import { runProbe } from "./calling/probe";
 
 const PORT = Number(process.env.ZL_PORT ?? 17789);
 const TOKEN = process.env.ZL_TOKEN ?? "";
@@ -34,6 +36,7 @@ type State =
 
 let state: State = { state: "boot" };
 let api: API | null = null;
+let calling: { api: API; controls: CallControls; stop: AbortController } | null = null;
 let store: Store | null = null;
 let me = { id: "", name: "", avatar: "" };
 let qrActions: { retry: () => unknown; abort: () => unknown } | null = null;
@@ -122,6 +125,8 @@ async function loginQR() {
 }
 
 async function logout() {
+  calling?.stop.abort();
+  calling = null;
   api?.listener.stop();
   api = null;
   store?.close();
@@ -144,6 +149,10 @@ function trim() {
 }
 
 async function ready(a: API) {
+  calling?.stop.abort();
+  const controls = new CallControls();
+  const stop = new AbortController();
+  calling = { api: a, controls, stop };
   api = a;
   me.id = a.getOwnId();
   try {
@@ -181,6 +190,9 @@ async function ready(a: API) {
   store.delThread(me.id);
 
   const l = a.listener;
+  l.on("voip_control", (control) => {
+    if (api === a && !stop.signal.aborted) controls.receive(control);
+  });
   // Offline sync, as Zalo PC does it (docs/PROTOCOL.md): cmd 510/511 from the last stored
   // action id ("1" on a fresh install), then keep paging while pages come back. It must wait
   // for the cipher key: requests sent before it are dropped by the server.
@@ -590,6 +602,8 @@ async function handle(r: Req): Promise<unknown> {
     case "qr_retry": return void (qrActions ? qrActions.retry() : process.env.ZL_LOGIN === "web" ? loginQR() : loginPc());
     case "logout": return logout();
     case "reconnect":
+      calling?.stop.abort();
+      calling = null;
       api?.listener.stop();
       store?.close();
       store = null;
@@ -602,6 +616,10 @@ async function handle(r: Req): Promise<unknown> {
     return m;
   };
   switch (r.op) {
+    case "call_probe":
+      if (!TOKEN) throw new Error("authenticated call probe required");
+      if (!calling || calling.api !== api) throw new Error("call probe session unavailable");
+      return runProbe(r.probe, { api, controls: calling.controls, authenticated: true, signal: calling.stop.signal });
     case "search":
       return store.search(String(r.q ?? ""));
     case "bootstrap":
@@ -849,6 +867,7 @@ Bun.serve({
       try {
         send(ws, { rid: r.rid, ok: true, data: await handle(r) });
       } catch (e) {
+        if (r.op === "call_probe") return void send(ws, { rid: r.rid, ok: false, error: "call probe rejected or failed" });
         console.error(`${r.op} failed:`, e);
         send(ws, { rid: r.rid, ok: false, error: e instanceof Error ? e.message : String(e) });
       }

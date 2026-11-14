@@ -169,6 +169,7 @@ img { display: block; }
 
 /* ---------- main pane ---------- */
 .main { background: var(--main); display: flex; flex-direction: column; min-width: 0; position: relative; }
+.message-content { animation: fade 0.4s ease-out; }
 .welcome { flex: 1; display: grid; place-content: center; text-align: center; padding: 32px; gap: 10px; }
 .welcome h1 { font-size: 22px; font-weight: 400; margin: 0; }
 .welcome h1 b { font-weight: 700; }

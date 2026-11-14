@@ -7,7 +7,7 @@
       "dependencies": {
         "preact": "^11.1.1",
         "xz-decompress": "^0.2.3",
-        "zca-js": "^2.2.0",
+        "zca-js": "2.2.0",
       },
       "devDependencies": {
         "@preact/preset-vite": "^2.10.6",
@@ -19,6 +19,9 @@
         "typescript": "^7.0.2",
       },
     },
+  },
+  "patchedDependencies": {
+    "zca-js@2.2.0": "patches/zca-js@2.2.0.patch",
   },
   "packages": {
     "@babel/code-frame": ["@babel/code-frame@7.29.7", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.29.7", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw=="],

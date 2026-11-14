@@ -1,0 +1,51 @@
+diff --git a/dist/apis/listen.d.ts b/dist/apis/listen.d.ts
+index 79c9eb72edc2bfe855dc046f7795436879fe0b44..ab170058d6cb534e1b233ac23fb180871dee3644 100644
+--- a/dist/apis/listen.d.ts
++++ b/dist/apis/listen.d.ts
+@@ -16,6 +16,12 @@ export type WsPayload<T = Record<string, unknown>> = {
+     subCmd: number;
+     data: T;
+ };
++export type VoipControl = {
++    act_type: "voip";
++    act: string;
++    data: unknown;
++    [key: string]: unknown;
++};
+ export type OnMessageCallback = (message: Message) => unknown;
+ export type OnClosedCallback = (code: CloseReason, reason: string) => unknown;
+ export type OnErrorCallback = (error: unknown) => unknown;
+@@ -38,6 +44,7 @@ interface ListenerEvents {
+     reaction: [reaction: Reaction];
+     old_reactions: [reactions: Reaction[], isGroup: boolean];
+     upload_attachment: [data: UploadEventData];
++    voip_control: [data: VoipControl];
+     undo: [data: Undo];
+     friend_event: [data: FriendEvent];
+     group_event: [data: GroupEvent];
+diff --git a/dist/apis/listen.js b/dist/apis/listen.js
+index ce5d95e1ea1791f5225e7d4a6f2cd734f0c2d67d..bd97f5948d7c93073c6a4a5e3e016c831cc4b412 100644
+--- a/dist/apis/listen.js
++++ b/dist/apis/listen.js
+@@ -225,6 +225,9 @@ export class Listener extends EventEmitter {
+                             this.ctx.uploadCallbacks.delete(String(control.content.fileId));
+                             this.emit("upload_attachment", data);
+                         }
++                        else if (control.content.act_type == "voip") {
++                            this.emit("voip_control", control.content);
++                        }
+                         else if (control.content.act_type == "group") {
+                             // 31/08/2024
+                             // for some reason, Zalo send both join and join_reject event when admin approve join requests
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 55f0b02988849efeb83150693ecff30d688d9905..a250cadf8fa30029e5a3de2464112c4afb6065d8 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -154,6 +154,7 @@ export type { FileData, ImageData, UploadAttachmentResponse, UploadAttachmentTyp
+ export type { UploadProductPhotoPayload, UploadProductPhotoResponse } from "./apis/uploadProductPhoto.js";
+ export type { VotePollResponse } from "./apis/votePoll.js";
+ export type { CustomAPICallback, CustomAPIProps } from "./apis/custom.js";
++export type { VoipControl } from "./apis/listen.js";
+ export { CloseReason } from "./apis/listen.js";
+ export { LoginQRCallbackEventType } from "./apis/loginQR.js";
+ export { FriendRecommendationsType } from "./apis/getFriendRecommendations.js";
